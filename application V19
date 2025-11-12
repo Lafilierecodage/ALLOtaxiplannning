@@ -1,0 +1,3008 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestion Coopérative Taxi</title>
+    <!-- Utilisation de Tailwind CSS pour un design rapide et moderne -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Bibliothèque pour la gestion des dates (facilite les calculs) -->
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/locale/fr.js"></script> <!-- Ajout de la locale française -->
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/isoWeek.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/customParseFormat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/isBetween.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/minMax.js"></script>
+    <!-- Bibliothèque pour la génération de fichiers Excel -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+    <!-- Bibliothèque pour la génération d'images depuis le HTML -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script>
+        // Extension de Day.js avec les plugins nécessaires
+        dayjs.extend(dayjs_plugin_isoWeek);
+        dayjs.extend(dayjs_plugin_customParseFormat);
+        dayjs.extend(dayjs_plugin_isBetween);
+        dayjs.extend(dayjs_plugin_minMax);
+        dayjs.locale('fr'); // Activation de la locale française
+    </script>
+    <style>
+        /* Styles personnalisés pour améliorer l'interface */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Style pour l'impression du rapport mensuel */
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #report-content, #report-content * {
+                visibility: visible;
+            }
+            #report-content {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+            .no-print {
+                display: none;
+            }
+        }
+        /* Conteneur pour une case "jour" du calendrier */
+        .calendar-day-slot-container {
+            min-height: 120px; /* Hauteur minimale pour 4 lignes + en-tête */
+            display: flex;
+            flex-direction: column;
+        }
+        /* Zone où les créneaux et slots sont affichés */
+        .day-content-area {
+            flex-grow: 1; /* Prend l'espace restant */
+            position: relative; /* Référence pour le positionnement absolu */
+        }
+        /* Style pour les barres de créneaux (employés assignés) */
+        .shift-bar {
+            position: absolute;
+            height: 20px; /* Hauteur d'une barre de créneau */
+            border-radius: 4px;
+            color: white;
+            font-size: 12px;
+            padding: 2px 6px;
+            overflow: visible; /* Permet au texte (initiales) de dépasser si besoin */
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            border: 1px solid rgba(0,0,0,0.3);
+            cursor: pointer; /* Indique qu'on peut cliquer/saisir */
+            transition: all 0.2s ease-in-out;
+            z-index: 10; /* Au-dessus des slots prédéfinis (z-index: 1) */
+        }
+        .shift-bar:hover {
+            transform: scale(1.02); /* Léger zoom au survol */
+            z-index: 20; /* Passe au-dessus des autres barres au survol */
+        }
+        /* Style pour la barre en cours de glissement */
+        .shift-bar.dragging {
+            opacity: 0.5;
+            cursor: grabbing;
+        }
+        /* Style pour une case "jour" survolée par un créneau */
+        .drag-over {
+            background-color: rgba(30, 64, 175, 0.5) !important; 
+            border: 2px dashed #60a5fa !important;
+        }
+        /* Bouton '+' pour l'ajout manuel */
+        .slot-add-btn {
+            opacity: 0.6; /* Discret par défaut */
+            transition: opacity 0.2s ease-in-out;
+            z-index: 15; /* Au-dessus des slots, mais sous une barre survolée */
+            margin-right: 2px;
+        }
+        /* Le bouton '+' devient visible au survol de la case jour */
+        .calendar-day-slot-container:hover .slot-add-btn {
+            opacity: 1; 
+        }
+        
+        /* NOUVEAU: Style pour les créneaux 3x8 prédéfinis (le "fond de grille") */
+        .predefined-slot-bar {
+            position: absolute;
+            height: 22px; /* Un peu plus grand pour être une cible facile */
+            border-radius: 4px;
+            background-color: rgba(75, 85, 99, 0.3); /* Fond semi-transparent */
+            /* MODIFIÉ: Couleur des pointillés changée de #6b7280 (gray-500) à #374151 (gray-700) pour être plus discrète */
+            border: 1px dashed #374151; 
+            color: #9ca3af;
+            font-size: 11px;
+            z-index: 1; /* En arrière-plan, sous les .shift-bar (z-index: 10) */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        /* NOUVEAU: Style du slot 3x8 lors d'un survol de D&D (employé ou créneau) */
+        .predefined-slot-bar.drag-over-slot {
+            background-color: rgba(30, 64, 175, 0.5) !important; /* Devient bleu (cible valide) */
+            border: 2px dashed #60a5fa !important;
+            transform: scale(1.02);
+            z-index: 2; /* Juste au-dessus du fond, mais sous les .shift-bar */
+        }
+        /* NOUVEAU: Style pour les noms d'employés glissables dans le récap */
+        .draggable-employee {
+            cursor: grab;
+        }
+        .draggable-employee:grabbing {
+            cursor: grabbing;
+        }
+        
+        /* NOUVEAU: Style pour ignorer les barres de créneau lors du glissement d'un *employé* */
+        /* Permet de "voir" les .predefined-slot-bar en dessous */
+        .employee-dragging .shift-bar {
+            pointer-events: none; /* Désactive les événements souris sur les barres */
+        }
+        
+        /* AJOUT: Style pour ignorer les barres lors du glissement d'un *autre créneau* */
+        .shift-dragging .shift-bar {
+            pointer-events: none;
+        }
+        /* AJOUT: S'assurer que la barre en cours de glissement reste interactive */
+        .shift-dragging .shift-bar.dragging {
+            pointer-events: auto; /* La barre glissée reste la cible */
+        }
+        
+        /* --- NOUVEAUX STYLES POUR LA SAISIE RAPIDE (V18) --- */
+        /* Style pour les boutons glissables (2j, 3j...) */
+        .quick-add-btn {
+            cursor: grab;
+            transition: all 0.2s ease-in-out;
+            padding: 4px 8px; /* Taille cliquable */
+            font-size: 12px;
+            border: 1px solid #4b5563; /* gray-600 */
+        }
+        .quick-add-btn:hover {
+            background-color: #4b5563; /* gray-600 */
+            border-color: #6b7280; /* gray-500 */
+        }
+        /* Style du bouton pendant le glissement */
+        .quick-add-btn.dragging {
+            opacity: 0.5;
+            cursor: grabbing;
+            background-color: #3b82f6; /* blue-500 */
+            border-color: #3b82f6;
+        }
+        /* Style pour le bouton '+' (ajout manuel rapide) */
+        .quick-add-manual-btn {
+            transition: all 0.2s ease-in-out;
+            padding: 4px 6px;
+            font-size: 14px;
+            border: 1px solid transparent;
+        }
+        .quick-add-manual-btn:hover {
+            background-color: #4b5563; /* gray-600 */
+            color: #3b82f6; /* blue-500 */
+            border-color: #6b7280;
+        }
+        /* Comme pour les autres D&D, rend les créneaux transparents */
+        .quick-add-dragging .shift-bar {
+            pointer-events: none;
+        }
+        /* --- FIN DES NOUVEAUX STYLES --- */
+        
+        /* NOUVEAU (V21): Bouton de suppression de semaine */
+        .delete-week-btn {
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            opacity: 0.3; /* Très discret par défaut */
+            transition: all 0.2s ease-in-out;
+            padding: 2px;
+            border-radius: 4px;
+            line-height: 1; /* Assure que l'icône est bien centrée */
+        }
+        /* NOUVEAU (V24): Bouton de configuration de semaine */
+        .config-week-btn {
+            position: absolute;
+            bottom: 4px;
+            /* Placé à gauche de la poubelle (qui est à right: 4px) */
+            right: 28px; 
+            opacity: 0.3;
+            transition: all 0.2s ease-in-out;
+            padding: 2px;
+            border-radius: 4px;
+            line-height: 1;
+        }
+        .week-number-cell:hover .config-week-btn {
+            opacity: 1; /* Rendre visible au survol de la cellule */
+        }
+        .config-week-btn:hover {
+            opacity: 1;
+            background-color: #3b82f6; /* blue-500 */
+            color: white;
+        }
+        /* La cellule de semaine doit être en 'relative' pour que le bouton fonctionne */
+        .week-number-cell:hover .delete-week-btn {
+            opacity: 1; /* Rendre visible au survol de la cellule */
+        }
+        .delete-week-btn:hover {
+            opacity: 1;
+            background-color: #ef4444; /* red-500 */
+            color: white;
+        }
+
+        /* Styles pour les onglets des mois */
+        .month-tab {
+            padding: 8px 16px;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s ease-in-out;
+            color: #9ca3af; 
+            text-align: center;
+            flex-grow: 1;
+        }
+        .month-tab:hover {
+            background-color: #374151;
+            color: #d1d5db;
+        }
+        .month-tab.active {
+            color: #ffffff;
+            border-bottom-color: #3b82f6; /* Indicateur bleu pour le mois actif */
+            font-weight: 600;
+        }
+        /* Styles pour l'export image (planning individuel) */
+        #image-export-schedule .day {
+            border: 1px solid #e5e7eb;
+            min-height: 80px;
+        }
+        #image-export-schedule .day-number {
+            font-size: 12px;
+            text-align: right;
+            padding: 2px 4px;
+            color: #6b7280;
+        }
+        #image-export-schedule .shift {
+            border-radius: 4px;
+            color: white;
+            padding: 2px 6px;
+            font-size: 11px;
+            margin: 1px 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* NOUVEAU (V24): Styles pour la modale de configuration de semaine */
+        #week-config-modal .config-line {
+            border-bottom: 1px solid #4b5563; /* gray-600 */
+            padding-bottom: 1rem;
+            margin-bottom: 1rem;
+        }
+        #week-config-modal .config-line-label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #d1d5db; /* gray-300 */
+        }
+        #week-config-modal .slot-config-inputs {
+            display: flex;
+            flex-wrap: wrap; /* Permet de passer à la ligne si 5 slots */
+            gap: 0.5rem;
+        }
+        #week-config-modal .slot-config-group {
+            display: flex;
+            align-items: center;
+            background-color: #374151; /* gray-700 */
+            border-radius: 0.375rem; /* rounded-md */
+            padding: 0.25rem 0.5rem;
+        }
+        #week-config-modal .slot-config-group input[type="time"] {
+            background-color: #4b5563; /* gray-600 */
+            border: 1px solid #6b7280; /* gray-500 */
+            color: white;
+            padding: 0.25rem;
+            border-radius: 0.25rem;
+            width: 80px; /* Largeur fixe pour les champs heure */
+        }
+        #week-config-modal .slot-config-group span {
+            margin: 0 0.25rem;
+            color: #9ca3af; /* gray-400 */
+        }
+        #week-config-modal .slot-config-remove-btn {
+            background-color: transparent;
+            color: #ef4444; /* red-500 */
+            border: none;
+            cursor: pointer;
+            padding-left: 0.5rem;
+            font-weight: bold;
+            font-size: 1.25rem; /* text-xl */
+            line-height: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+
+    <!-- CONTENEUR PRINCIPAL DE L'APPLICATION -->
+    <div class="container mx-auto p-4 md:p-6">
+
+        <!-- EN-TÊTE : Titre, Navigation et Actions -->
+        <header class="flex flex-col md:flex-row justify-between items-center mb-6">
+            <h1 class="text-3xl font-bold text-white mb-4 md:mb-0">Planning Coopérative Taxi</h1>
+            <!-- Navigation Annuelle -->
+            <div class="flex items-center space-x-2">
+                <button id="prev-year-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">&lt;</button>
+                <h2 id="current-year" class="text-xl font-semibold w-24 text-center"></h2>
+                <button id="next-year-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">&gt;</button>
+            </div>
+            <!-- Actions principales -->
+            <div class="flex space-x-2 mt-4 md:mt-0">
+                <button id="manage-employees-btn" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Gérer les Employés</button>
+            </div>
+        </header>
+
+        <!-- GRILLE DU CALENDRIER -->
+        <main id="calendar-container" class="bg-gray-800 rounded-lg shadow-xl p-4">
+            <!-- Barre d'onglets pour les mois -->
+            <div id="month-tabs-container" class="flex flex-wrap mb-4 border-b border-gray-700">
+                <!-- Les onglets des mois seront injectés ici par JS -->
+            </div>
+
+            <!-- En-têtes des jours de la semaine (Grille CSS) -->
+            <div class="grid grid-cols-[60px_repeat(7,1fr)_120px] gap-1 text-center font-semibold text-gray-400 mb-2">
+                <div>Sem.</div>
+                <div>Lundi</div>
+                <div>Mardi</div>
+                <div>Mercredi</div>
+                <div>Jeudi</div>
+                <div>Vendredi</div>
+                <div>Samedi</div>
+                <div>Dimanche</div>
+                <div>Total Heures</div>
+            </div>
+            <!-- Conteneur pour les jours du calendrier, généré par JS -->
+            <div id="calendar-grid" class="grid grid-cols-[60px_repeat(7,1fr)_120px] gap-1">
+                <!-- Les cases du calendrier seront injectées ici -->
+            </div>
+        </main>
+        
+        <!-- NOUVELLE SECTION: SAISIE RAPIDE (V18) -->
+        <!-- MODIFIÉ (V20): Marge supérieure réduite (mt-6 -> mt-4) -->
+        <section id="quick-add-container" class="bg-gray-800 rounded-lg shadow-xl p-4 mt-4 text-sm">
+            <!-- MODIFIÉ (V20): Marge inférieure réduite (mb-4 -> mb-2) -->
+            <h3 class="font-bold text-lg mb-2">Saisie Rapide (Glisser-Déposer en série)</h3>
+            <div id="quick-add-list" class="overflow-x-auto">
+                <!-- La liste des employés avec les boutons sera injectée ici -->
+            </div>
+        </section>
+        
+        <!-- SECTION RÉCAPITULATIF DES HEURES (Mensuel et Annuel) -->
+        <!-- MODIFIÉ (V20): Marge supérieure réduite (mt-6 -> mt-4) -->
+        <footer id="summary-container" class="bg-gray-800 rounded-lg shadow-xl p-4 mt-4 text-sm">
+            <!-- Récapitulatif Mensuel -->
+            <!-- MODIFIÉ (V20): Marge inférieure réduite (mb-4 -> mb-2) -->
+            <div class="flex justify-between items-center mb-2">
+                <div class="flex items-center space-x-3">
+                    <h3 class="font-bold text-lg">Récapitulatif du mois en cours</h3>
+                    <button id="export-monthly-summary-btn" title="Exporter en Excel" class="text-gray-400 hover:text-green-400 transition-colors">
+                        <!-- Icône Excel -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-file-earmark-excel-custom" viewBox="0 0 16 16">
+                            <path d="M9.293 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.707A1 1 0 0 0 13.707 4L10 .293A1 1 0 0 0 9.293 0zM9.5 3.5v-2l3 3h-2a1 1 0 0 1-1-1z"/>
+                            <path fill="#107C41" d="M5 6.5h6v4H5z"/>
+                            <path fill="#fff" d="m6.146 7.646 1.147 1.147 1.147-1.147a.5.5 0 1 1 .708.708L8.707 9.5l1.147 1.146a.5.5 0 0 1-.708.708L8 10.207l-1.146 1.147a.5.5 0 0 1-.708-.708L7.293 9.5 6.146 8.354a.5.5 0 0 1 0-.708z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div id="summary-total-general" class="font-bold text-lg"></div>
+            </div>
+            <div id="summary-content" class="overflow-x-auto">
+                <!-- Le tableau des totaux mensuels sera injecté ici -->
+            </div>
+
+            <!-- SECTION POUR LE RÉCAPITULATIF ANNUEL -->
+            <!-- MODIFIÉ (V20): Marge supérieure réduite (mt-8 -> mt-6) -->
+            <div id="annual-summary-section" class="mt-6">
+                <!-- MODIFIÉ (V20): Marge inférieure réduite (mb-4 -> mb-2) -->
+                <div class="flex justify-between items-center mb-2">
+                    <div class="flex items-center space-x-3">
+                        <h3 id="annual-summary-title" class="font-bold text-lg">Récapitulatif de l'Année en Cours</h3>
+                        <button id="export-annual-summary-btn" title="Exporter en Excel" class="text-gray-400 hover:text-green-400 transition-colors">
+                           <!-- Icône Excel -->
+                           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-file-earmark-excel-custom" viewBox="0 0 16 16">
+                                <path d="M9.293 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.707A1 1 0 0 0 13.707 4L10 .293A1 1 0 0 0 9.293 0zM9.5 3.5v-2l3 3h-2a1 1 0 0 1-1-1z"/>
+                                <path fill="#107C41" d="M5 6.5h6v4H5z"/>
+                                <path fill="#fff" d="m6.146 7.646 1.147 1.147 1.147-1.147a.5.5 0 1 1 .708.708L8.707 9.5l1.147 1.146a.5.5 0 0 1-.708.708L8 10.207l-1.146 1.147a.5.5 0 0 1-.708-.708L7.293 9.5 6.146 8.354a.5.5 0 0 1 0-.708z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="annual-summary-total-general" class="font-bold text-lg"></div>
+                </div>
+                <div id="annual-summary-content" class="overflow-x-auto">
+                    <!-- Le tableau des totaux annuels sera injecté ici -->
+                </div>
+            </div>
+        </footer>
+
+    </div>
+
+    <!-- MODAL : GESTION DES EMPLOYÉS -->
+    <div id="employee-modal" class="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 hidden">
+        <div class="bg-gray-800 text-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <h2 class="text-2xl font-bold mb-4">Gestion des Employés</h2>
+            <!-- Liste des employés -->
+            <div id="employee-list" class="mb-4 max-h-64 overflow-y-auto">
+                <!-- La liste des employés sera injectée ici -->
+            </div>
+            <!-- Formulaire d'ajout -->
+            <form id="add-employee-form" class="space-y-3">
+                <div class="flex items-center space-x-2">
+                    <input type="text" id="employee-name" placeholder="Nom du nouvel employé" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+                    <input type="email" id="employee-email" placeholder="Courriel (optionnel)" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg transition-colors w-full">Ajouter</button>
+            </form>
+            <button id="close-employee-modal-btn" class="mt-4 bg-gray-600 hover:bg-gray-500 w-full text-white font-bold py-2 px-4 rounded-lg transition-colors">Fermer</button>
+        </div>
+    </div>
+
+    <!-- MODAL : AJOUT/ÉDITION D'UN CRÉNEAU HORAIRE (pour l'ajout manuel) -->
+    <!-- RESTAURÉ (V23): Ce bloc était manquant, causant l'erreur 'shiftForm is null' -->
+    <div id="shift-modal" class="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 hidden">
+        <div class="bg-gray-800 text-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <h2 class="text-2xl font-bold mb-4" id="shift-modal-title">Ajouter un Créneau</h2>
+            <form id="shift-form">
+                <input type="hidden" id="shift-id">
+                <input type="hidden" id="shift-date">
+                
+                <div class="mb-4">
+                    <label for="shift-employee" class="block mb-2">Employé</label>
+                    <select id="shift-employee" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600" required></select>
+                </div>
+                
+                <!-- Champs de date et heure pour le créneau "sur mesure" -->
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label for="start-date" class="block mb-2">Date de début</label>
+                        <input type="date" id="start-date" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600" required>
+                    </div>
+                    <div>
+                        <label for="start-time" class="block mb-2">Heure de début</label>
+                        <input type="time" id="start-time" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600" required>
+                    </div>
+                    <div>
+                        <label for="end-date" class="block mb-2">Date de fin</label>
+                        <input type="date" id="end-date" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600" required>
+                    </div>
+                     <div>
+                        <label for="end-time" class="block mb-2">Heure de fin</label>
+                        <input type="time" id="end-time" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600" required>
+                    </div>
+                </div>
+
+                <!-- Affichage de la durée calculée en temps réel -->
+                <div id="shift-duration-display" class="text-right text-gray-400 text-sm mb-4 h-5">
+                    <!-- La durée sera injectée ici par JS -->
+                </div>
+
+                <div class="mb-4">
+                    <label for="shift-type" class="block mb-2">Type de créneau</label>
+                    <select id="shift-type" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600">
+                        <option value="travail">Travail</option>
+                        <option value="conge">Congé Payé</option>
+                    </select>
+                </div>
+
+                <!-- NOUVEL AJOUT: Champ pour la duplication de créneau -->
+                <div class="mb-4">
+                    <label for="shift-duplicate" class="block mb-2">Dupliquer sur les jours suivants</label>
+                    <select id="shift-duplicate" class="bg-gray-700 text-white w-full p-2 rounded-md border border-gray-600">
+                        <option value="0">Ne pas dupliquer</option>
+                        <option value="1">1 jour suivant</option>
+                        <option value="2">2 jours suivants</option>
+                        <option value="3">3 jours suivants</option>
+                        <option value="4">4 jours suivants</option>
+                    </select>
+                </div>
+
+                <!-- Boutons d'action de la modal -->
+                <div class="flex justify-between items-center mt-6">
+                    <div>
+                        <button type="button" id="delete-shift-btn" class="bg-red-700 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors hidden">Supprimer</button>
+                    </div>
+                    <div class="space-x-2">
+                         <button type="button" id="close-shift-modal-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Annuler</button>
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Enregistrer</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- NOUVEAU (V24): MODAL DE CONFIGURATION DE SEMAINE -->
+    <div id="week-config-modal" class="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-[60] hidden">
+        <div class="bg-gray-800 text-white rounded-lg shadow-xl w-full max-w-4xl p-6">
+            <h2 class="text-2xl font-bold mb-4" id="week-config-modal-title">Configurer les Slots de la Semaine</h2>
+            
+            <p class="text-sm text-gray-400 mb-4">
+                Définissez les slots de dépôt (jusqu'à 5 par ligne) pour chaque "typologie" (Ligne 1 à 4).
+            </p>
+
+            <!-- Formulaire de configuration des 4 lignes -->
+            <form id="week-config-form" class="space-y-4 mb-6 max-h-[60vh] overflow-y-auto pr-2">
+                <!-- Ligne 1 -->
+                <div class="config-line" id="config-line-1">
+                    <label class="config-line-label">Ligne 1 (Typologie)</label>
+                    <div class="slot-config-inputs">
+                        <!-- Les groupes de slots (ex: 07:00-15:00) seront injectés ici -->
+                    </div>
+                    <button type="button" class="add-slot-btn mt-2 bg-blue-600 hover:bg-blue-500 text-white text-xs py-1 px-2 rounded" data-line="1">Ajouter Slot</button>
+                </div>
+                <!-- Ligne 2 -->
+                <div class="config-line" id="config-line-2">
+                    <label class="config-line-label">Ligne 2 (Typologie)</label>
+                    <div class="slot-config-inputs">
+                        <!-- Les groupes de slots seront injectés ici -->
+                    </div>
+                    <button type="button" class="add-slot-btn mt-2 bg-blue-600 hover:bg-blue-500 text-white text-xs py-1 px-2 rounded" data-line="2">Ajouter Slot</button>
+                </div>
+                <!-- Ligne 3 -->
+                <div class="config-line" id="config-line-3">
+                    <label class="config-line-label">Ligne 3 (Typologie)</label>
+                    <div class="slot-config-inputs">
+                        <!-- Les groupes de slots seront injectés ici -->
+                    </div>
+                    <button type="button" class="add-slot-btn mt-2 bg-blue-600 hover:bg-blue-500 text-white text-xs py-1 px-2 rounded" data-line="3">Ajouter Slot</button>
+                </div>
+                <!-- Ligne 4 -->
+                <div class="config-line" id="config-line-4">
+                    <label class="config-line-label">Ligne 4 (Typologie)</label>
+                    <div class="slot-config-inputs">
+                        <!-- Les groupes de slots seront injectés ici -->
+                    </div>
+                    <button type="button" class="add-slot-btn mt-2 bg-blue-600 hover:bg-blue-500 text-white text-xs py-1 px-2 rounded" data-line="4">Ajouter Slot</button>
+                </div>
+            </form>
+
+            <!-- Options de Duplication -->
+            <div class="bg-gray-700 p-4 rounded-md">
+                <h3 class="font-semibold mb-3">Options de Duplication</h3>
+                <div class="flex flex-col md:flex-row justify-between items-center space-y-2 md:space-y-0">
+                    <!-- Case à cocher S+1 -->
+                    <div class="flex items-center">
+                        <input type="checkbox" id="config-duplicate-next-week" class="h-4 w-4 rounded mr-2">
+                        <label for="config-duplicate-next-week">Dupliquer sur la semaine suivante</label>
+                    </div>
+                    <!-- Liste déroulante S+X -->
+                    <div class="flex items-center space-x-2">
+                        <label for="config-duplicate-until-week">Dupliquer de la S. <span id="config-start-week-label"></span> jusqu'à S.</label>
+                        <select id="config-duplicate-until-week" class="bg-gray-800 text-white p-1 rounded-md border border-gray-600">
+                            <!-- Les options de semaine (ex: 12 à 53) seront injectées ici -->
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Boutons d'action de la modal -->
+            <div class="flex justify-between items-center mt-6">
+                <button type="button" id="reset-week-config-btn" class="bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Réinitialiser (3x8)</button>
+                <div class="space-x-2">
+                     <button type="button" id="close-week-config-modal-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Annuler</button>
+                    <button type="button" id="save-week-config-btn" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Enregistrer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- MODAL : EXPORT IMAGE DU PLANNING INDIVIDUEL (Aperçu avant téléchargement) -->
+    <!-- RESTAURÉ (V23): Ce bloc était également manquant -->
+    <div id="image-export-modal" class="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50 hidden">
+        <div class="bg-gray-800 text-white rounded-lg shadow-xl w-full max-w-5xl p-6">
+            <!-- Conteneur pour le contenu qui sera transformé en image -->
+            <div id="image-export-content" class="bg-white text-black p-8">
+                <!-- Le planning individuel (format "imprimable") sera injecté ici -->
+            </div>
+            <div class="mt-4 flex justify-end space-x-2 no-print">
+                <button id="download-png-btn" class="bg-teal-600 hover:bg-teal-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Télécharger (PNG)</button>
+                <button id="close-image-export-modal-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Fermer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NOUVEAU (V22): MODAL DE CONFIRMATION GÉNÉRIQUE -->
+    <!-- Remplace tous les 'window.confirm()' qui sont bloqués par l'iframe -->
+    <div id="confirm-modal" class="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-[60] hidden">
+        <div class="bg-gray-800 text-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <h2 class="text-xl font-bold mb-4" id="confirm-modal-title">Veuillez confirmer</h2>
+            <p id="confirm-modal-message" class="mb-6 whitespace-pre-line">Êtes-vous sûr ?</p> <!-- whitespace-pre-line pour respecter les sauts de ligne (\n) -->
+            <div class="flex justify-end space-x-2">
+                <button id="close-confirm-modal-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Annuler</button>
+                <button id="confirm-modal-btn" class="bg-red-700 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">Confirmer</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- MODAL : ALERTES LÉGALES (Repos, Annualisation, etc.) -->
+    <div id="alert-modal" class="fixed top-5 right-5 z-[100]">
+        <div id="alert-container" class="max-w-sm w-full">
+            <!-- Les alertes (erreurs, avertissements) seront injectées ici -->
+        </div>
+    </div>
+
+
+    <script>
+    // --- Initialisation de l'état de l'application ---
+    document.addEventListener('DOMContentLoaded', () => {
+        // Constantes légales (logique métier)
+        const ANNUAL_HOUR_LIMIT = 1607; // Plafond d'heures annualisables
+        const WEEKLY_HOUR_LIMIT_FOR_SUP = 42; // Seuil de déclenchement des heures sup (non annualisables)
+        const MIN_CONSECUTIVE_REST_HOURS = 36; // Repos hebdomadaire minimum
+
+        // NOUVELLE CONSTANTE: Date de début de saisie autorisée (1er Nov 2025)
+        // Empêche la saisie avant cette date pour protéger les anciennes données
+        const PLANNING_START_DATE = dayjs('2025-11-01');
+
+        // Couleurs prédéfinies pour les employés (cycliques)
+        const EMPLOYEE_COLORS = [
+            '#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e', '#14b8a6', '#0ea5e9', '#6366f1', '#a855f7', '#d946ef'
+        ];
+        const LEAVE_COLOR = '#6b7280'; // Gris pour les congés
+
+        // NOUVEAU (V24): Configuration par défaut des slots (les 3x8 d'origine)
+        // Cette config est maintenant la base si aucune config n'est définie pour la semaine
+        const DEFAULT_SLOT_CONFIG = {
+            line1: [
+                { start: '07:00', end: '15:00', endDay: '0' }, // 7h-15h (même jour)
+                { start: '15:00', end: '23:00', endDay: '0' }, // 15h-23h (même jour)
+                { start: '23:00', end: '07:00', endDay: '1' }  // 23h-07h (jour suivant)
+            ],
+            line2: [
+                { start: '07:00', end: '15:00', endDay: '0' },
+                { start: '15:00', end: '23:00', endDay: '0' },
+                { start: '23:00', end: '07:00', endDay: '1' }
+            ],
+            line3: [
+                { start: '07:00', end: '15:00', endDay: '0' },
+                { start: '15:00', end: '23:00', endDay: '0' },
+                { start: '23:00', end: '07:00', endDay: '1' }
+            ],
+            line4: [
+                { start: '07:00', end: '15:00', endDay: '0' },
+                { start: '15:00', end: '23:00', endDay: '0' },
+                { start: '23:00', end: '07:00', endDay: '1' }
+            ]
+        };
+
+        // État global de l'application (la "source de vérité")
+        let state = {
+            currentDate: dayjs(), // La date contrôlant l'affichage (mois/année)
+            employees: [], // Tableau d'objets { id, name, color, email }
+            shifts: [], // Tableau d'objets { id, employeeId, start, end, type ('travail' or 'conge') }
+            // NOUVEAU (V24): Stocke les configurations de slots par semaine
+            // Clé: "YYYY-WSS" (ex: "2026-W11"), Valeur: Objet config (voir DEFAULT_SLOT_CONFIG)
+            slotConfigurations: {} 
+        };
+
+        // --- Récupération des Éléments du DOM ---
+        const calendarGrid = document.getElementById('calendar-grid');
+        const currentYear = document.getElementById('current-year');
+        const prevYearBtn = document.getElementById('prev-year-btn');
+        const nextYearBtn = document.getElementById('next-year-btn');
+        const monthTabsContainer = document.getElementById('month-tabs-container');
+        
+        // Modals et boutons
+        const employeeModal = document.getElementById('employee-modal');
+        const manageEmployeesBtn = document.getElementById('manage-employees-btn');
+        const closeEmployeeModalBtn = document.getElementById('close-employee-modal-btn');
+        const addEmployeeForm = document.getElementById('add-employee-form');
+        const employeeList = document.getElementById('employee-list');
+        const employeeNameInput = document.getElementById('employee-name');
+        // NOUVEAU: Récupération du champ email (pour le vider après ajout)
+        const employeeEmailInput = document.getElementById('employee-email');
+
+
+        const shiftModal = document.getElementById('shift-modal');
+        const closeShiftModalBtn = document.getElementById('close-shift-modal-btn');
+        const shiftForm = document.getElementById('shift-form');
+        const shiftModalTitle = document.getElementById('shift-modal-title');
+        const deleteShiftBtn = document.getElementById('delete-shift-btn');
+        
+        const imageExportModal = document.getElementById('image-export-modal');
+        const downloadPngBtn = document.getElementById('download-png-btn');
+        const closeImageExportModalBtn = document.getElementById('close-image-export-modal-btn');
+
+        const summaryContainer = document.getElementById('summary-container'); // Le footer entier (pour le D&D)
+        
+        // NOUVEAU (V18): Récupération des éléments de Saisie Rapide
+        const quickAddContainer = document.getElementById('quick-add-container');
+        const quickAddList = document.getElementById('quick-add-list');
+        
+        // NOUVEAU (V22): Éléments de la modal de confirmation
+        const confirmModal = document.getElementById('confirm-modal');
+        const confirmModalMessage = document.getElementById('confirm-modal-message');
+        const confirmModalBtn = document.getElementById('confirm-modal-btn');
+        const closeConfirmModalBtn = document.getElementById('close-confirm-modal-btn');
+
+        // NOUVEAU (V24): Éléments de la modal de configuration de semaine
+        const weekConfigModal = document.getElementById('week-config-modal');
+        const weekConfigModalTitle = document.getElementById('week-config-modal-title');
+        const weekConfigForm = document.getElementById('week-config-form');
+        const closeWeekConfigModalBtn = document.getElementById('close-week-config-modal-btn');
+        const saveWeekConfigBtn = document.getElementById('save-week-config-btn');
+        const resetWeekConfigBtn = document.getElementById('reset-week-config-btn');
+        const configDuplicateUntilWeek = document.getElementById('config-duplicate-until-week');
+        const configDuplicateNextWeek = document.getElementById('config-duplicate-next-week');
+        const configStartWeekLabel = document.getElementById('config-start-week-label');
+
+        // --- Fonctions de gestion de l'état (Persistance des données) ---
+
+        /**
+         * Sauvegarde l'état global (employés, créneaux) dans le LocalStorage du navigateur.
+         */
+        const saveState = () => {
+            localStorage.setItem('taxiCoopState', JSON.stringify(state));
+            console.log("State saved."); // Log de débogage
+        };
+
+        /**
+         * Charge l'état depuis le LocalStorage.
+         * Si aucun état n'est sauvegardé, initialise avec des données d'exemple.
+         * Règle métier : Ouvre toujours sur la date du jour, quel que soit l'état sauvegardé.
+         */
+        const loadState = () => {
+            const savedState = localStorage.getItem('taxiCoopState');
+            if (savedState) {
+                state = JSON.parse(savedState);
+                
+                // RÈGLE MÉTIER (Demande utilisateur): Toujours ouvrir sur la date du jour.
+                state.currentDate = dayjs();
+                
+                // Assurer la compatibilité (si d'anciennes données n'ont pas la clé 'email')
+                state.employees.forEach(emp => {
+                    if (emp.email === undefined) {
+                        emp.email = '';
+                    }
+                });
+                
+                // NOUVEAU (V24): Assurer la compatibilité (si slotConfigurations n'existe pas)
+                if (!state.slotConfigurations) {
+                    state.slotConfigurations = {};
+                }
+            } else {
+                // Initialiser avec des données d'exemple si c'est la première visite
+                
+                // RÈGLE MÉTIER: L'état initial (neuf) s'ouvre aussi sur la date du jour.
+                state.currentDate = dayjs();
+                
+                state.employees = [
+                    { id: 1, name: 'Jean Dupont', color: EMPLOYEE_COLORS[0], email: 'jean.dupont@example.com' },
+                    { id: 2, name: 'Marie Curie', color: EMPLOYEE_COLORS[1], email: '' },
+                ];
+                state.shifts = [
+                    // Exemples de créneaux
+                    {id: 1, employeeId: 1, start: dayjs().startOf('week').add(1, 'day').hour(8).toISOString(), end: dayjs().startOf('week').add(1, 'day').hour(16).toISOString(), type: 'travail'},
+                    {id: 2, employeeId: 2, start: dayjs().startOf('week').add(1, 'day').hour(16).toISOString(), end: dayjs().startOf('week').add(2, 'day').hour(0).toISOString(), type: 'travail'}
+                ];
+                // NOUVEAU (V24): Initialiser la config des slots
+                state.slotConfigurations = {};
+            }
+        };
+
+        // --- Fonctions de Rendu (Affichage) ---
+
+        /**
+         * Affiche les onglets des 12 mois de l'année en cours.
+         * Met en surbrillance le mois actuellement sélectionné dans `state.currentDate`.
+         */
+        const renderMonthTabs = () => {
+            monthTabsContainer.innerHTML = '';
+            const monthNames = ["Janv.", "Févr.", "Mars", "Avril", "Mai", "Juin", "Juill.", "Août", "Sept.", "Oct.", "Nov.", "Déc."];
+            const currentMonth = state.currentDate.month();
+
+            monthNames.forEach((name, index) => {
+                const tab = document.createElement('div');
+                tab.className = `month-tab ${index === currentMonth ? 'active' : ''}`;
+                tab.textContent = name;
+                tab.dataset.month = index; // Stocke l'index du mois (0-11)
+                monthTabsContainer.appendChild(tab);
+            });
+        };
+
+        /**
+         * Fonction principale de rendu.
+         * Nettoie et redessine toute la grille du calendrier pour le mois en cours.
+         * S'assure d'afficher 6 semaines (42 jours) pour une hauteur constante.
+         */
+        const renderCalendar = () => {
+            calendarGrid.innerHTML = '';
+            currentYear.textContent = state.currentDate.format('YYYY');
+            renderMonthTabs(); // Met à jour les onglets des mois
+            
+            const startOfMonth = state.currentDate.startOf('month');
+            const endOfMonth = state.currentDate.endOf('month');
+            
+            // Commence l'affichage par le premier lundi avant le début du mois
+            let calendarStart = startOfMonth.startOf('isoWeek');
+            
+            let daysToRender = [];
+            let currentDay = calendarStart;
+            
+            // Génère les jours à afficher (incluant les jours des mois précédent/suivant)
+            while (currentDay.isBefore(endOfMonth) || currentDay.isoWeek() === endOfMonth.isoWeek()) {
+                 daysToRender.push(currentDay);
+                 if (daysToRender.length >= 42) break; // Limite à 6 semaines
+                 currentDay = currentDay.add(1, 'day');
+            }
+
+            // Assure que la grille a toujours 6 semaines (42 jours) pour une hauteur constante
+            while(daysToRender.length < 42) {
+                daysToRender.push(currentDay);
+                currentDay = currentDay.add(1, 'day');
+            }
+
+            // Boucle de rendu pour les 42 jours
+            for(let i = 0; i < daysToRender.length; i++) {
+                const day = daysToRender[i];
+                // NOUVEAU (V24): Identifiant unique pour la semaine
+                const weekIdentifier = `${day.isoWeekYear()}-W${day.isoWeek()}`;
+
+                // Colonne 1: Numéro de semaine (affiché pour chaque Lundi)
+                if(i % 7 === 0) {
+                     const weekNumberCell = document.createElement('div');
+                     // MODIFIÉ (V21): Ajout de 'relative' et de la classe 'week-number-cell'
+                     weekNumberCell.className = 'week-number-cell relative flex items-center justify-center text-sm font-semibold text-gray-500 bg-gray-900 rounded-l-lg';
+                     weekNumberCell.textContent = day.isoWeek();
+                     
+                     // NOUVEAU (V24): Ajout du bouton de configuration (Engrenage)
+                     const configBtn = document.createElement('button');
+                     configBtn.className = 'config-week-btn';
+                     configBtn.dataset.weekIdentifier = weekIdentifier;
+                     configBtn.dataset.weekStart = day.format('YYYY-MM-DD'); // Pour la modal
+                     configBtn.title = `Configurer les slots de la semaine ${day.isoWeek()}`;
+                     configBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-gear-fill" viewBox="0 0 16 16">
+                        <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311a1.464 1.464 0 0 1-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c-1.4-.413-1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.858 2.929 2.929 0 0 1 0 5.858z"/>
+                      </svg>`;
+                     weekNumberCell.appendChild(configBtn);
+
+                     // NOUVEAU (V21): Ajout du bouton de suppression
+                     const weekStart = day.format('YYYY-MM-DD');
+                     const weekEnd = day.add(6, 'day').format('YYYY-MM-DD');
+                     
+                     const deleteBtn = document.createElement('button');
+                     deleteBtn.className = 'delete-week-btn';
+                     deleteBtn.dataset.weekStart = weekStart;
+                     deleteBtn.dataset.weekEnd = weekEnd;
+                     deleteBtn.title = `Supprimer tous les créneaux de la semaine ${day.isoWeek()}`;
+                     // Icône SVG de poubelle
+                     deleteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-trash3-fill" viewBox="0 0 16 16">
+                        <path d="M11 1.5v1h3.5a.5.5 0 0 1 0 1h-.538l-.853 10.66A2 2 0 0 1 11.115 16h-6.23a2 2 0 0 1-1.994-1.84L2.038 3.5H1.5a.5.5 0 0 1 0-1H5v-1A1.5 1.5 0 0 1 6.5 0h3A1.5 1.5 0 0 1 11 1.5Zm-5 0v1h4v-1a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5ZM4.5 5.029l.5 8.5a.5.5 0 1 0 .998-.06l-.5-8.5a.5.5 0 1 0-.998.06Zm6.53-.528a.5.5 0 0 0-.528.47l-.5 8.5a.5.5 0 0 0 .998.058l.5-8.5a.5.5 0 0 0-.47-.528ZM8 4.5a.5.5 0 0 0-.5.5v8.5a.5.5 0 0 0 1 0v-8.5A.5.5 0 0 0 8 4.5Z"/>
+                      </svg>`;
+                      
+                     weekNumberCell.appendChild(deleteBtn);
+                     calendarGrid.appendChild(weekNumberCell);
+                }
+
+                // Colonnes 2-8: Cases des jours
+                const dayCell = document.createElement('div');
+                const isCurrentMonth = day.month() === state.currentDate.month();
+                // Applique un style estompé si le jour n'est pas dans le mois courant
+                dayCell.className = `calendar-day-slot-container relative border border-gray-700 ${isCurrentMonth ? 'bg-gray-800' : 'bg-gray-800/50'}`;
+                dayCell.dataset.date = day.format('YYYY-MM-DD'); // Stocke la date sur l'élément
+                // NOUVEAU (V24): Stocke l'identifiant de la semaine sur la case
+                dayCell.dataset.weekIdentifier = weekIdentifier;
+
+                // Structure interne de la case (En-tête + Zone de contenu)
+                dayCell.innerHTML = `
+                    <div class="relative flex justify-between items-center text-sm py-0.5 ${isCurrentMonth ? 'font-bold text-gray-300' : 'text-gray-500'} border-b border-gray-700">
+                        <span class="pl-1">${day.date()}</span>
+                        <!-- Le bouton '+' sera inséré ici (respect du prompt) -->
+                    </div>
+                    <div class="day-content-area p-1">
+                        <!-- Les créneaux (shift-bar) et slots (predefined-slot-bar) seront injectés ici -->
+                    </div>
+                `;
+
+                // Bouton '+' pour l'ajout manuel (respect du prompt)
+                const addBtn = document.createElement('button');
+                addBtn.className = 'slot-add-btn bg-blue-500 hover:bg-blue-400 text-white w-4 h-4 flex items-center justify-center text-xs font-bold rounded-sm';
+                addBtn.textContent = '+';
+                addBtn.onclick = (e) => {
+                    e.stopPropagation(); // Empêche d'autres clics (ex: ouverture de la case)
+                    
+                    // VÉRIFICATION (Demande utilisateur): Bloquer l'ajout avant la date de début
+                    if (day.isBefore(PLANNING_START_DATE, 'day')) {
+                        displayAlert('warning', `La saisie n'est pas autorisée avant le ${PLANNING_START_DATE.format('DD/MM/YYYY')}.`);
+                        return;
+                    }
+                    
+                    openShiftModal(day.format('YYYY-MM-DD')); // Ouvre la modal d'ajout manuel
+                };
+                dayCell.querySelector('.relative').appendChild(addBtn); // Ajouté à l'en-tête de la case
+
+                calendarGrid.appendChild(dayCell);
+
+                // Colonne 9: Totaux hebdomadaires (affiché pour chaque Dimanche)
+                if (i % 7 === 6) {
+                    const totalCell = document.createElement('div');
+                    totalCell.className = 'weekly-total-cell p-1 bg-gray-900 border border-gray-700 rounded-r-lg flex flex-col justify-start space-y-1';
+                    totalCell.dataset.weekStart = daysToRender[i - 6].format('YYYY-MM-DD');
+                    totalCell.dataset.weekEnd = day.format('YYYY-MM-DD');
+                    calendarGrid.appendChild(totalCell);
+                }
+            }
+            
+            // Appels de rendu dépendants (une fois la grille de base créée)
+            renderPredefinedSlots(); // Affiche les 12 slots 3x8 en fond
+            renderWeeklyTotals(); // Calcule et affiche les totaux dans la colonne de droite
+            renderShifts(); // Affiche les créneaux (barres colorées)
+            
+            // NOUVEAU (V18): Mettre à jour la liste de Saisie Rapide
+            renderQuickAddList(); 
+            
+            renderAnnualSummary(); // Met à jour le récapitulatif annuel en bas
+            updateSummary(); // Met à jour le récapitulatif mensuel en bas
+            checkAllLegalConstraints(); // Vérifie les alertes
+        };
+
+        /**
+         * NOUVELLE FONCTION (coeur du prompt)
+         * Affiche les 12 slots 3x8 (4 lignes x 3 quarts) en fond de chaque case jour.
+         * Ces slots servent de cibles pour le glisser-déposer.
+         */
+        // MODIFIÉ (V24): La fonction est entièrement réécrite pour lire la config dynamique
+        const renderPredefinedSlots = () => {
+            const dayCells = calendarGrid.querySelectorAll('.calendar-day-slot-container');
+
+            dayCells.forEach(dayCell => {
+                const date = dayCell.dataset.date;
+                const weekIdentifier = dayCell.dataset.weekIdentifier;
+                const contentArea = dayCell.querySelector('.day-content-area');
+                if (!contentArea) return;
+
+                // Récupère la configuration de la semaine, ou utilise celle par défaut
+                const weekConfig = state.slotConfigurations[weekIdentifier] || DEFAULT_SLOT_CONFIG;
+
+                // Boucle sur les 4 lignes de la configuration (line1, line2, line3, line4)
+                Object.keys(weekConfig).forEach((lineKey, laneIndex) => {
+                    const lineSlots = weekConfig[lineKey]; // ex: [{start: '07:00', end: '15:00', endDay: '0'}, ...]
+                    
+                    // Calcule la position verticale (top) en fonction de l'index de la ligne
+                    const topPosition = `${5 + laneIndex * 22}px`; // 22px de hauteur par ligne
+
+                    // Boucle sur chaque slot défini pour cette ligne
+                    lineSlots.forEach(slot => {
+                        const slotStart = dayjs(date + 'T' + slot.start);
+                        // endDay: '0' = même jour, '1' = jour suivant
+                        const slotEnd = dayjs(date + 'T' + slot.end).add(parseInt(slot.endDay || 0), 'day'); 
+                        
+                        // Calcule la durée totale du slot (ex: 23:00 à 07:00 = 8 heures)
+                        const totalSlotDurationHours = slotEnd.diff(slotStart, 'hour', true);
+                        if (totalSlotDurationHours <= 0) return; // Ignore les slots invalides
+                        
+                        // Gère l'affichage des slots qui sont à cheval sur minuit (ex: 23:00-07:00)
+                        // Il faut dessiner deux barres: une de 23:00 à 00:00, et une de 00:00 à 07:00
+                        
+                        const dayStart = dayjs(date).startOf('day');
+                        const dayEnd = dayjs(date).endOf('day');
+
+                        // Partie 1: Portion du slot visible AUJOURD'HUI
+                        const bar1Start = dayjs.max(slotStart, dayStart);
+                        const bar1End = dayjs.min(slotEnd, dayEnd);
+                        const bar1DurationHours = bar1End.diff(bar1Start, 'hour', true);
+
+                        if (bar1DurationHours > 0) {
+                            const bar1 = createPredefinedSlotBar(
+                                topPosition,
+                                bar1Start.hour() + bar1Start.minute() / 60, // startHour
+                                bar1DurationHours,
+                                date, // startDate
+                                slotStart.format('YYYY-MM-DD'), // fullStartDate
+                                slotEnd.format('YYYY-MM-DD'),   // fullEndDate
+                                slotStart.format('HH:mm'),       // startTime
+                                slotEnd.format('HH:mm')          // endTime
+                            );
+                            contentArea.appendChild(bar1);
+                        }
+
+                        // Partie 2: Portion du slot visible DEMAIN (mais dessinée aujourd'hui si le slot commence HIER)
+                        // Cas d'un slot 23:00-07:00 : slotStart est HIER (ex: 18 Nov 23:00), slotEnd est AUJOURD'HUI (ex: 19 Nov 07:00)
+                        const bar2Start = dayStart; // Commence à 00:00
+                        const bar2End = dayjs.min(slotEnd, dayEnd); // Fin max à 07:00
+                        
+                        // On vérifie si le slot a commencé AVANT aujourd'hui (donc hier)
+                        if (slotStart.isBefore(dayStart) && bar2End.isAfter(bar2Start)) {
+                             const bar2DurationHours = bar2End.diff(bar2Start, 'hour', true);
+                             if (bar2DurationHours > 0) {
+                                const bar2 = createPredefinedSlotBar(
+                                    topPosition,
+                                    0, // startHour (commence à 00:00)
+                                    bar2DurationHours,
+                                    date, // startDate (le jour où on dessine)
+                                    slotStart.format('YYYY-MM-DD'), // fullStartDate (hier)
+                                    slotEnd.format('YYYY-MM-DD'),   // fullEndDate (aujourd'hui)
+                                    slotStart.format('HH:mm'),       // startTime (23:00)
+                                    slotEnd.format('HH:mm')          // endTime (07:00)
+                                );
+                                contentArea.appendChild(bar2);
+                             }
+                        }
+                    });
+                });
+            });
+        };
+
+        /**
+         * NOUVEAU (V24): Fonction utilitaire pour créer une barre de slot prédéfini
+         * C'est la fonction qui assure que les 'dataset' sont corrects pour le D&D
+         */
+        const createPredefinedSlotBar = (top, startHour, durationHours, currentDate, fullStartDate, fullEndDate, startTime, endTime) => {
+            const bar = document.createElement('div');
+            bar.className = 'predefined-slot-bar';
+            bar.style.top = top;
+            
+            const leftPercent = (startHour / 24) * 100;
+            const widthPercent = (durationHours / 24) * 100;
+
+            // Utilisation de calc() pour un chevauchement de 1px (assure la jointure visuelle)
+            bar.style.left = `calc(${leftPercent}% - 1px)`;
+            bar.style.width = `calc(${widthPercent}% + 2px)`;
+            
+            bar.textContent = ''; // Pas de texte (exigence prompt)
+            
+            // Stocke les données du slot COMPLET (crucial pour handleDrop)
+            // Si on clique sur le slot 00:00-07:00, il doit créer un créneau 23:00(hier)-07:00(auj)
+            // Si on clique sur le slot 23:00-00:00, il doit créer 23:00(auj)-07:00(demain)
+            
+            // Le 'startDate' pour handleDrop doit être le jour où le slot *commence* logiquement
+            bar.dataset.startDate = fullStartDate;
+            bar.dataset.endDate = fullEndDate;
+            bar.dataset.startTime = startTime;
+            bar.dataset.endTime = endTime;
+            
+            return bar;
+        };
+
+
+        /**
+         * Calcule et affiche les totaux d'heures par employé dans la colonne de droite.
+         */
+        const renderWeeklyTotals = () => {
+            const totalCells = document.querySelectorAll('.weekly-total-cell');
+            totalCells.forEach(cell => {
+                const weekStart = dayjs(cell.dataset.weekStart).startOf('day');
+                const weekEnd = dayjs(cell.dataset.weekEnd).endOf('day');
+                cell.innerHTML = ''; // Nettoyer le contenu précédent
+
+                // Affichage des totaux par employé
+                state.employees.forEach(employee => {
+                    const weeklyHours = calculateHoursForPeriod(employee.id, weekStart, weekEnd);
+                    if (weeklyHours > 0) {
+                        const totalDiv = document.createElement('div');
+                        let textColor = 'text-gray-400';
+                        // Alertes visuelles pour les heures sup
+                        if (weeklyHours > WEEKLY_HOUR_LIMIT_FOR_SUP) {
+                            textColor = 'text-red-400 font-bold'; // Dépassement
+                        } else if (weeklyHours > 38) {
+                            textColor = 'text-yellow-400'; // Seuil d'attention
+                        }
+                        totalDiv.className = `text-xs whitespace-nowrap flex items-center ${textColor}`;
+                        totalDiv.innerHTML = `
+                           <span class="w-2 h-2 rounded-full mr-2" style="background-color: ${employee.color};"></span>
+                           <span>${employee.name.split(' ')[0]}: ${weeklyHours.toFixed(1)}h</span>
+                        `;
+                        cell.appendChild(totalDiv);
+                    }
+                });
+            });
+        };
+
+        /**
+         * Affiche les créneaux horaires (barres colorées) sur le calendrier.
+         * Gère la superposition (stacking) s'ils se chevauchent, jusqu'à 4 niveaux.
+         * Gère les congés en bas de la case.
+         */
+        const renderShifts = () => {
+            const MAX_LANES = 4; // 4 lignes de travail
+            const calendarDays = calendarGrid.querySelectorAll('.calendar-day-slot-container');
+
+            calendarDays.forEach(dayCell => {
+                const dateStr = dayCell.dataset.date;
+                const dayStart = dayjs(dateStr).startOf('day');
+                const dayEnd = dayjs(dateStr).endOf('day');
+                const contentArea = dayCell.querySelector('.day-content-area');
+                if (!contentArea) return;
+                
+                // Nettoyer seulement les .shift-bar (pas les .predefined-slot-bar)
+                contentArea.querySelectorAll('.shift-bar').forEach(bar => bar.remove());
+
+                // 1. Récupérer tous les créneaux (travail + congé) qui touchent ce jour
+                const allShiftsForDay = state.shifts.filter(shift => {
+                    const shiftStart = dayjs(shift.start);
+                    const shiftEnd = dayjs(shift.end);
+                    // Le créneau commence avant la fin du jour ET finit après le début du jour
+                    return shiftStart.isBefore(dayEnd) && shiftEnd.isAfter(dayStart);
+                });
+
+                const workShifts = allShiftsForDay
+                    .filter(s => s.type === 'travail')
+                    .sort((a, b) => dayjs(a.start).diff(dayjs(b.start))); // Trier par début
+                    
+                const leaveShifts = allShiftsForDay.filter(s => s.type === 'conge');
+
+                // --- GESTION DES CRÉNEAUX DE TRAVAIL (Logique d'empilement) ---
+                if (workShifts.length > 0) {
+                    // 1. Trouver tous les points de début/fin de créneaux dans la journée
+                    const eventTimes = new Set();
+                    eventTimes.add(dayStart.valueOf());
+                    eventTimes.add(dayEnd.valueOf());
+
+                    workShifts.forEach(shift => {
+                        const shiftStart = dayjs(shift.start);
+                        const shiftEnd = dayjs(shift.end);
+                        if (shiftStart.isAfter(dayStart) && shiftStart.isBefore(dayEnd)) {
+                            eventTimes.add(shiftStart.valueOf());
+                        }
+                        if (shiftEnd.isAfter(dayStart) && shiftEnd.isBefore(dayEnd)) {
+                            eventTimes.add(shiftEnd.valueOf());
+                        }
+                    });
+
+                    // 2. Trier ces points pour créer des "intervalles"
+                    const sortedTimes = Array.from(eventTimes).map(t => dayjs(t)).sort((a, b) => a.diff(b));
+
+                    // 3. Pour chaque intervalle, trouver les créneaux actifs et les empiler
+                    for (let i = 0; i < sortedTimes.length - 1; i++) {
+                        const intervalStart = sortedTimes[i];
+                        const intervalEnd = sortedTimes[i + 1];
+                        // Point milieu pour vérifier quels créneaux sont actifs
+                        const intervalMidpoint = intervalStart.add(intervalEnd.diff(intervalStart) / 2, 'ms');
+                        if (intervalStart.isSame(intervalEnd)) continue;
+
+                        // Trouver les créneaux actifs
+                        const activeShifts = workShifts.filter(shift => {
+                            const shiftStart = dayjs(shift.start);
+                            const shiftEnd = dayjs(shift.end);
+                            return intervalMidpoint.isBetween(shiftStart, shiftEnd, null, '[)'); // [start, end)
+                        });
+
+                        // 4. Dessiner une barre pour chaque créneau actif, en l'empilant
+                        activeShifts.forEach((shift, index) => {
+                            
+                            // 'index' sert de numéro de "lane" (0, 1, 2, 3)
+                            const lane = index;
+                            
+                            if (lane >= MAX_LANES) return; // Ne pas déborder (on a 4 lignes)
+
+                            const employee = state.employees.find(e => e.id === shift.employeeId);
+                            if (!employee) return;
+                            
+                            // Calcul de la position et de la largeur de la barre
+                            const barStartHour = intervalStart.hour() + intervalStart.minute() / 60;
+                            const barEndHour = intervalEnd.hour() + intervalEnd.minute() / 60;
+                            const effectiveEndHour = (barEndHour === 0 && intervalEnd.isAfter(intervalStart)) ? 24 : barEndHour;
+                            const duration = effectiveEndHour - barStartHour;
+                            if (duration <= 0) return;
+
+                            const bar = document.createElement('div');
+                            bar.className = 'shift-bar';
+                            bar.draggable = true;
+                            bar.style.backgroundColor = employee.color; // Couleur de l'employé
+                            // MODIFIÉ: 24px -> 22px (hauteur du slot) + 2px (marge) = 24px.
+                            // Utilisation de 24px pour espacer verticalement les barres.
+                            bar.style.top = `${5 + lane * 24}px`; // Position verticale (ligne 0, 1, 2 ou 3)
+                            bar.style.left = `${(barStartHour / 24) * 100}%`;
+                            bar.style.width = `${(duration / 24) * 100}%`;
+                            
+                            const initial = employee.name.substring(0, 1);
+                            bar.textContent = initial; // Affiche l'initiale
+                            
+                            // Info-bulle (tooltip) au survol
+                            const fullShiftStart = dayjs(shift.start);
+                            const fullShiftEnd = dayjs(shift.end);
+                            const totalMinutes = fullShiftEnd.diff(fullShiftStart, 'minute');
+                            const hours = Math.floor(totalMinutes / 60);
+                            const minutes = totalMinutes % 60;
+                            const durationText = `${hours}h${String(minutes).padStart(2, '0')}`;
+                            const tooltipText = `${employee.name}\n${fullShiftStart.format('HH:mm')} - ${fullShiftEnd.format('HH:mm')} (${durationText})`;
+                            bar.setAttribute('title', tooltipText);
+                            
+                            bar.dataset.shiftId = shift.id;
+                            bar.onclick = (e) => { e.stopPropagation(); openShiftModal(null, shift.id); };
+                            contentArea.appendChild(bar);
+                        });
+                    }
+                }
+                
+                // --- GESTION DES CRÉNEAUX DE CONGÉ ---
+                // Les congés sont affichés en bas de la case et ne suivent pas la logique des 4 lignes
+                leaveShifts.forEach((shift, index) => {
+                    const employee = state.employees.find(e => e.id === shift.employeeId);
+                    if (!employee) return;
+                    
+                    const shiftStart = dayjs(shift.start);
+                    const shiftEnd = dayjs(shift.end);
+                    
+                    // Tronque le début et la fin à la journée en cours
+                    const barStart = dayjs.max(shiftStart, dayStart);
+                    const barEnd = dayjs.min(shiftEnd, dayEnd);
+                    
+                    const barStartHour = barStart.hour() + barStart.minute() / 60;
+                    let barEndHour = barEnd.hour() + barEnd.minute() / 60;
+                    if(barEndHour === 0 && barEnd.isAfter(barStart)) barEndHour = 24;
+                    const duration = barEndHour - barStartHour;
+                    
+                    if (duration <= 0) return;
+                    
+                    const bar = document.createElement('div');
+                    bar.className = 'shift-bar';
+                    bar.draggable = true;
+                    bar.style.backgroundColor = LEAVE_COLOR; // Couleur "Congé"
+                    // Positionnement en bas, empilés
+                    bar.style.bottom = `${5 + index * 24}px`; 
+                    bar.style.left = `${(barStartHour / 24) * 100}%`;
+                    bar.style.width = `${(duration / 24) * 100}%`;
+                    
+                    const initial = employee.name.substring(0, 1);
+                    bar.textContent = initial;
+                    
+                    const fullShiftStart = dayjs(shift.start);
+                    const fullShiftEnd = dayjs(shift.end);
+                    const tooltipText = `${employee.name}\nCongé Payé\n${fullShiftStart.format('DD/MM HH:mm')} - ${fullShiftEnd.format('DD/MM HH:mm')}`;
+                    bar.setAttribute('title', tooltipText);
+                    
+                    bar.dataset.shiftId = shift.id;
+                    bar.onclick = (e) => { e.stopPropagation(); openShiftModal(null, shift.id); };
+                    
+                    contentArea.appendChild(bar);
+                });
+            });
+        };
+
+        /**
+         * NOUVELLE FONCTION (V18)
+         * Affiche la liste des employés dans le panneau de Saisie Rapide
+         * avec les boutons d'action (2j, 3j, 4j, 5j, +).
+         */
+        const renderQuickAddList = () => {
+            quickAddList.innerHTML = ''; // Nettoyer le contenu précédent
+
+            // Structure du tableau
+            let tableHTML = `<table class="w-full text-left">
+                <thead class="text-xs text-gray-400 uppercase bg-gray-700/50">
+                    <tr>
+                        <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                        <th scope="col" class="py-1 px-4">Employé</th>
+                        <th scope="col" class="py-1 px-4 text-center">Actions de Dépôt en Série</th>
+                        <th scope="col" class="py-1 px-4 text-center">Ajout Manuel</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+            
+            // Boutons d'action
+            const actionButtons = [
+                // NOUVEAU (V19): Ajout du bouton "1 jour"
+                { days: 1, label: '1 jour' },
+                { days: 2, label: '2 jours' },
+                { days: 3, label: '3 jours' },
+                { days: 4, label: '4 jours' },
+                { days: 5, label: '5 jours' }
+            ];
+
+            // Créer une ligne pour chaque employé
+            state.employees.forEach(emp => {
+                tableHTML += `<tr class="border-b border-gray-700">
+                    <!-- 1. Nom de l'employé -->
+                    <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                    <td class="py-1 px-4 font-semibold flex items-center">
+                        <span class="w-3 h-3 rounded-full mr-3" style="background-color: ${emp.color};"></span>
+                        ${emp.name}
+                    </td>
+                    
+                    <!-- 2. Boutons de D&D en série -->
+                    <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                    <td class="py-1 px-4 text-center">
+                        <div class="flex justify-center space-x-2">`;
+                
+                // Ajoute les boutons 2j, 3j, 4j, 5j
+                actionButtons.forEach(btn => {
+                    tableHTML += `<button 
+                                    draggable="true" 
+                                    class="quick-add-btn bg-gray-700 hover:bg-gray-600 rounded" 
+                                    data-employee-id="${emp.id}" 
+                                    data-days="${btn.days}">
+                                    ${btn.label}
+                                 </button>`;
+                });
+                        
+                tableHTML += `</div>
+                    </td>
+                    
+                    <!-- 3. Bouton d'ajout manuel rapide -->
+                    <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                    <td class="py-1 px-4 text-center">
+                        <button 
+                            class="quick-add-manual-btn text-gray-400 hover:text-blue-400 rounded" 
+                            data-employee-id="${emp.id}" 
+                            title="Ajout manuel pour ${emp.name}">
+                            <!-- Icône Plus/Croix -->
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-lg inline-block" viewBox="0 0 16 16">
+                              <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2Z"/>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>`;
+            });
+
+            tableHTML += `</tbody></table>`;
+            quickAddList.innerHTML = tableHTML;
+        };
+
+
+        /**
+         * Affiche la liste des employés dans la modal de gestion.
+         */
+        const renderEmployeeList = () => {
+            employeeList.innerHTML = '';
+            state.employees.forEach(emp => {
+                const empDiv = document.createElement('div');
+                empDiv.className = 'flex items-center justify-between p-2 bg-gray-700 rounded-md mb-2';
+                empDiv.innerHTML = `
+                    <div class="flex-grow">
+                        <div class="flex items-center">
+                            <span class="w-4 h-4 rounded-full mr-3" style="background-color: ${emp.color};"></span>
+                            <span class="font-semibold">${emp.name}</span>
+                        </div>
+                        <div class="text-xs text-gray-400 pl-7 mt-1 cursor-pointer hover:text-white">
+                            <!-- Email éditable au clic -->
+                            <span class="employee-email-display" data-id="${emp.id}">${emp.email || 'Ajouter un courriel'}</span>
+                        </div>
+                    </div>
+                    <button data-id="${emp.id}" class="delete-employee-btn text-red-400 hover:text-red-300 ml-4 flex-shrink-0">Supprimer</button>
+                `;
+                employeeList.appendChild(empDiv);
+            });
+        };
+        
+        /**
+         * Met à jour le tableau du récapitulatif ANNUEL (cumulé de Janvier au mois en cours).
+         */
+        const renderAnnualSummary = () => {
+            const summaryContent = document.getElementById('annual-summary-content');
+            const summaryTotalGeneral = document.getElementById('annual-summary-total-general');
+            const summaryTitle = document.getElementById('annual-summary-title');
+            summaryContent.innerHTML = '';
+            
+            const yearStart = state.currentDate.startOf('year');
+            const yearEnd = state.currentDate.endOf('month'); // Jusqu'à la fin du mois en cours
+            
+            // Mettre à jour le titre dynamiquement
+            summaryTitle.textContent = `Récapitulatif de Janvier à ${state.currentDate.format('MMMM')}`;
+            
+            let totalGeneralHours = 0;
+
+            let tableHTML = `<table class="w-full text-left">
+                <thead class="text-xs text-gray-400 uppercase bg-gray-700/50">
+                    <tr>
+                        <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                        <th scope="col" class="py-1 px-4">Employé</th>
+                        <th scope="col" class="py-1 px-4 text-center">Heures Année</th>
+                        <th scope="col" class="py-1 px-4 text-center">H. Sup > 42h</th>
+                        <th scope="col" class="py-1 px-4 text-center">Nuit (21-00h)</th>
+                        <th scope="col" class="py-1 px-4 text-center">Nuit (00-06h)</th>
+                        <th scope="col" class="py-1 px-4 text-center">Heures Annualisables</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+            state.employees.forEach(emp => {
+                // Calcul des totaux pour l'année (jusqu'au mois courant)
+                const annualHours = calculateHoursForPeriod(emp.id, yearStart, yearEnd);
+                totalGeneralHours += annualHours;
+
+                const nightHours = calculateNightHours(emp.id, yearStart, yearEnd);
+                const supHours = calculateSupHours(emp.id, yearStart, yearEnd);
+                
+                // Heures annualisables = Total - Heures Sup (celles > 42h)
+                const annualizableHours = annualHours - supHours;
+
+                tableHTML += `<tr class="border-b border-gray-700">
+                    <!-- NOUVEAU: Ajout de draggable="true" et data-employee-id pour le D&D -->
+                    <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                    <td class="py-1 px-4 font-semibold flex items-center draggable-employee" draggable="true" data-employee-id="${emp.id}">
+                        <span class="w-3 h-3 rounded-full mr-3" style="background-color: ${emp.color};"></span>
+                        ${emp.name}
+                    </td>
+                    <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                    <td class="py-1 px-4 text-center">${annualHours.toFixed(2)}h</td>
+                    <td class="py-1 px-4 text-center font-semibold ${supHours > 0 ? 'text-yellow-400' : ''}">${supHours.toFixed(2)}h</td>
+                    <td class="py-1 px-4 text-center">${nightHours.nightHours21_00.toFixed(2)}h</td>
+                    <td class="py-1 px-4 text-center">${nightHours.nightHours00_06.toFixed(2)}h</td>
+                    <!-- Alerte visuelle si le plafond de 1607h est dépassé -->
+                    <td class="py-1 px-4 text-center font-bold ${annualizableHours > ANNUAL_HOUR_LIMIT ? 'text-red-400' : ''}">${annualizableHours.toFixed(2)} / ${ANNUAL_HOUR_LIMIT}h</td>
+                </tr>`;
+            });
+
+            tableHTML += `</tbody></table>`;
+            summaryContent.innerHTML = tableHTML;
+            summaryTotalGeneral.innerHTML = `Total Cumulé : <span class="text-white">${totalGeneralHours.toFixed(2)}h</span>`;
+        };
+
+        /**
+         * Met à jour le tableau du récapitulatif MENSUEL.
+         */
+        const updateSummary = () => {
+            const summaryContent = document.getElementById('summary-content');
+            const summaryTotalGeneral = document.getElementById('summary-total-general');
+            summaryContent.innerHTML = '';
+            const monthStart = state.currentDate.startOf('month');
+            const monthEnd = state.currentDate.endOf('month');
+            
+            let totalGeneralHours = 0;
+
+            let tableHTML = `<table class="w-full text-left">
+                <thead class="text-xs text-gray-400 uppercase bg-gray-700/50">
+                    <tr>
+                        <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                        <th scope="col" class="py-1 px-4">Employé</th>
+                        <th scope="col"col="py-1 px-4 text-center">Heures Mois</th>
+                        <th scope="col" class="py-1 px-4 text-center">H. Sup > 42h</th>
+                        <th scope="col" class="py-1 px-4 text-center">Nuit (21-00h)</th>
+                        <th scope="col" class="py-1 px-4 text-center">Nuit (00-06h)</th>
+                        <th scope="col" class="py-1 px-4 text-center">Exporter</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+            state.employees.forEach(emp => {
+                // Calcul des totaux pour le mois en cours
+                const monthlyHours = calculateHoursForPeriod(emp.id, monthStart, monthEnd);
+                totalGeneralHours += monthlyHours;
+
+                const nightHours = calculateNightHours(emp.id, monthStart, monthEnd);
+                const supHours = calculateSupHours(emp.id, monthStart, monthEnd);
+
+                tableHTML += `<tr class="border-b border-gray-700">
+                    <!-- NOUVEAU: Ajout de draggable="true" et data-employee-id pour le D&D -->
+                    <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                    <td class="py-1 px-4 font-semibold flex items-center draggable-employee" draggable="true" data-employee-id="${emp.id}">
+                        <span class="w-3 h-3 rounded-full mr-3" style="background-color: ${emp.color};"></span>
+                        ${emp.name}
+                    </td>
+                    <!-- MODIFIÉ (V20): Padding vertical réduit (py-2 -> py-1) -->
+                    <td class="py-1 px-4 text-center">${monthlyHours.toFixed(2)}h</td>
+                    <td class="py-1 px-4 text-center font-semibold ${supHours > 0 ? 'text-yellow-400' : ''}">${supHours.toFixed(2)}h</td>
+                    <td class="py-1 px-4 text-center">${nightHours.nightHours21_00.toFixed(2)}h</td>
+                    <td class="py-1 px-4 text-center">${nightHours.nightHours00_06.toFixed(2)}h</td>
+                    <td class="py-1 px-4 text-center">
+                        <!-- Bouton pour l'export PNG individuel -->
+                        <button data-employee-id="${emp.id}" class="generate-png-btn text-gray-400 hover:text-white transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-printer-fill inline-block" viewBox="0 0 16 16">
+                                <path d="M5 1a2 2 0 0 0-2 2v1h10V3a2 2 0 0 0-2-2H5zm5 8H6a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1z"/>
+                                <path d="M0 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1v-2a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2H2a2 2 0 0 1-2-2V7zm2.5 1a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1z"/>
+                            </svg>
+                        </button>
+                    </td>
+                </tr>`;
+            });
+
+            tableHTML += `</tbody></table>`;
+            summaryContent.innerHTML = tableHTML;
+            summaryTotalGeneral.innerHTML = `Total Général : <span class="text-white">${totalGeneralHours.toFixed(2)}h</span>`;
+        };
+
+        // --- Fonctions de Logique Métier (Calculs) ---
+
+        /**
+         * Calcule les heures supplémentaires (> 42h) pour un employé sur une période donnée.
+         * Itère semaine par semaine dans la période.
+         */
+        const calculateSupHours = (employeeId, periodStart, periodEnd) => {
+            let supHours = 0;
+            const processedWeeks = new Set(); // Pour éviter de compter 2x la même semaine
+            let currentDay = periodStart.clone();
+
+            while(currentDay.isBefore(periodEnd) || currentDay.isSame(periodEnd, 'day')) {
+                const weekIdentifier = `${currentDay.isoWeekYear()}-${currentDay.isoWeek()}`;
+                if (!processedWeeks.has(weekIdentifier)) {
+                    processedWeeks.add(weekIdentifier);
+                    const weekStart = currentDay.startOf('isoWeek');
+                    const weekEnd = currentDay.endOf('isoWeek');
+                    const weeklyHours = calculateHoursForPeriod(employeeId, weekStart, weekEnd);
+                    // Si le total de la semaine dépasse 42h, l'excédent est compté comme H. Sup
+                    if (weeklyHours > WEEKLY_HOUR_LIMIT_FOR_SUP) {
+                        supHours += weeklyHours - WEEKLY_HOUR_LIMIT_FOR_SUP;
+                    }
+                }
+                currentDay = currentDay.add(1, 'day');
+            }
+            return supHours;
+        };
+
+        /**
+         * Calcule les heures de nuit (21h-00h et 00h-06h) pour un employé sur une période.
+         */
+        const calculateNightHours = (employeeId, periodStart, periodEnd) => {
+            let nightHours21_00 = 0;
+            let nightHours00_06 = 0;
+
+            const relevantShifts = state.shifts.filter(s =>
+                s.employeeId === employeeId &&
+                s.type === 'travail' &&
+                dayjs(s.start).isBefore(periodEnd) &&
+                dayjs(s.end).isAfter(periodStart)
+            );
+
+            relevantShifts.forEach(shift => {
+                // Limite le créneau à la période de calcul (ex: 1 mois)
+                const shiftStart = dayjs.max(dayjs(shift.start), periodStart);
+                const shiftEnd = dayjs.min(dayjs(shift.end), periodEnd);
+
+                let currentDay = shiftStart.startOf('day');
+
+                // Itère jour par jour à l'intérieur du créneau
+                while(currentDay.isBefore(shiftEnd)) {
+                    // Période 1 (Nuit "soir"): 21h à 00h
+                    const nightPeriod1_start = currentDay.hour(21);
+                    const nightPeriod1_end = currentDay.endOf('day').add(1, 'millisecond');
+                    
+                    const overlapStart1 = dayjs.max(shiftStart, nightPeriod1_start);
+                    const overlapEnd1 = dayjs.min(shiftEnd, nightPeriod1_end);
+                    if (overlapEnd1.isAfter(overlapStart1)) {
+                        nightHours21_00 += overlapEnd1.diff(overlapStart1, 'hour', true);
+                    }
+                    
+                    // Période 2 (Nuit "matin"): 00h à 06h
+                    const nightPeriod2_start = currentDay.startOf('day');
+                    const nightPeriod2_end = currentDay.hour(6);
+                    
+                    const overlapStart2 = dayjs.max(shiftStart, nightPeriod2_start);
+                    const overlapEnd2 = dayjs.min(shiftEnd, nightPeriod2_end);
+                    if (overlapEnd2.isAfter(overlapStart2)) {
+                        nightHours00_06 += overlapEnd2.diff(overlapStart2, 'hour', true);
+                    }
+
+                    currentDay = currentDay.add(1, 'day');
+                }
+            });
+            
+            return { nightHours21_00, nightHours00_06 };
+        };
+
+        /**
+         * Calcule le total des heures de 'travail' pour un employé sur une période donnée.
+         * Coupe les créneaux qui dépassent de la période.
+         */
+        const calculateHoursForPeriod = (employeeId, periodStart, periodEnd) => {
+            let totalHours = 0;
+            // Filtre les créneaux de travail pertinents
+            const relevantShifts = state.shifts.filter(s => 
+                s.employeeId === employeeId && 
+                s.type === 'travail' &&
+                dayjs(s.start).isBefore(periodEnd) && // Commencé avant la fin de la période
+                dayjs(s.end).isAfter(periodStart) // Fini après le début de la période
+            );
+            
+            relevantShifts.forEach(shift => {
+                const shiftStart = dayjs(shift.start);
+                const shiftEnd = dayjs(shift.end);
+                
+                // Calcule le début et la fin effectifs (tronqués à la période)
+                const start = dayjs.max(shiftStart, periodStart);
+                const end = dayjs.min(shiftEnd, periodEnd);
+
+                if (end.isAfter(start)) {
+                    totalHours += end.diff(start, 'hour', true); // Ajoute la durée en heures (décimales)
+                }
+            });
+            return totalHours;
+        };
+
+        /**
+         * Vérifie si un créneau proposé dépasse la limite de 10h sur 24h glissantes.
+         */
+        const isOverDailyHourLimit = (employeeId, proposedShift, shiftIdToExclude) => {
+            const MAX_HOURS_IN_24H = 10;
+            const proposedStart = dayjs(proposedShift.start);
+            const proposedEnd = dayjs(proposedShift.end);
+
+            // 1. Le créneau lui-même ne peut pas dépasser 10 heures
+            if (proposedEnd.diff(proposedStart, 'hour', true) > MAX_HOURS_IN_24H) {
+                return true;
+            }
+
+            // 2. Récupérer tous les créneaux de l'employé (sauf celui qu'on édite)
+            const allEmployeeShifts = state.shifts.filter(s =>
+                s.employeeId === employeeId &&
+                s.type === 'travail' &&
+                s.id !== shiftIdToExclude
+            );
+
+            // 3. Ajouter le nouveau créneau pour la vérification
+            const shiftsToCheck = [...allEmployeeShifts, { ...proposedShift, id: -1 }];
+            shiftsToCheck.sort((a, b) => dayjs(a.start).diff(dayjs(b.start)));
+
+            // 4. Itérer sur chaque créneau et l'utiliser comme début d'une fenêtre de 24h
+            for (const shift of shiftsToCheck) {
+                const windowStart = dayjs(shift.start);
+                const windowEnd = windowStart.add(24, 'hours');
+                
+                let hoursInWindow = 0;
+                // Calculer le total des heures travaillées DANS CETTE FENÊTRE
+                for (const s of shiftsToCheck) {
+                     const shiftStart = dayjs(s.start);
+                     const shiftEnd = dayjs(s.end);
+                     
+                     if (shiftStart.isBefore(windowEnd) && shiftEnd.isAfter(windowStart)) {
+                        const effectiveStart = dayjs.max(shiftStart, windowStart);
+                        const effectiveEnd = dayjs.min(shiftEnd, windowEnd);
+                        
+                        if (effectiveEnd.isAfter(effectiveStart)) {
+                            hoursInWindow += effectiveEnd.diff(effectiveStart, 'hour', true);
+                        }
+                     }
+                }
+                
+                if (hoursInWindow > MAX_HOURS_IN_24H) {
+                    return true; // Violation détectée
+                }
+            }
+
+            return false; // Aucune violation trouvée
+        };
+        
+        /**
+         * Vérifie si l'employé a bien 36h de repos consécutives dans la semaine du créneau proposé.
+         */
+        const hasWeeklyRest = (employeeId, proposedShift, shiftIdToExclude) => {
+            const proposedStart = dayjs(proposedShift.start);
+            const weekStart = proposedStart.startOf('isoWeek');
+            const weekEnd = proposedStart.endOf('isoWeek');
+
+            // 1. Récupérer tous les créneaux de travail de la semaine
+            const shiftsInWeek = state.shifts
+                .filter(s => 
+                    s.employeeId === employeeId &&
+                    s.type === 'travail' &&
+                    s.id !== shiftIdToExclude &&
+                    dayjs(s.start).isBefore(weekEnd) && 
+                    dayjs(s.end).isAfter(weekStart)
+                );
+            
+            // Ajouter le créneau proposé à la liste
+            shiftsInWeek.push(proposedShift);
+            shiftsInWeek.sort((a, b) => dayjs(a.start).diff(dayjs(b.start)));
+            
+            if (shiftsInWeek.length === 0) {
+                return true; // Pas de travail = repos respecté
+            }
+
+            let maxRest = 0;
+            
+            // 2. Calculer le repos au début de la semaine (du Lundi 00h au 1er créneau)
+            const firstShiftStart = dayjs(shiftsInWeek[0].start);
+            maxRest = Math.max(maxRest, firstShiftStart.diff(weekStart, 'hour', true));
+
+            // 3. Calculer le repos entre chaque créneau
+            for (let i = 0; i < shiftsInWeek.length - 1; i++) {
+                const currentShiftEnd = dayjs(shiftsInWeek[i].end);
+                const nextShiftStart = dayjs(shiftsInWeek[i+1].start);
+                if (nextShiftStart.isAfter(currentShiftEnd)) {
+                    maxRest = Math.max(maxRest, nextShiftStart.diff(currentShiftEnd, 'hour', true));
+                }
+            }
+
+            // 4. Calculer le repos à la fin de la semaine (du dernier créneau au Dimanche 24h)
+            const lastShiftEnd = dayjs(shiftsInWeek[shiftsInWeek.length - 1].end);
+            maxRest = Math.max(maxRest, weekEnd.diff(lastShiftEnd, 'hour', true));
+
+            // Vérifie si le plus grand intervalle de repos trouvé est >= 36h
+            return maxRest >= MIN_CONSECUTIVE_REST_HOURS;
+        };
+
+        /**
+         * NOUVELLE FONCTION (Garde-fou duplication)
+         * Vérifie si un créneau proposé se chevauche avec un créneau
+         * DEJA EXISTANT pour le même employé.
+         */
+        const isOverlappingExistingShift = (employeeId, proposedShift, shiftIdToExclude) => {
+            const proposedStart = dayjs(proposedShift.start);
+            const proposedEnd = dayjs(proposedShift.end);
+
+            // 1. Récupérer tous les autres créneaux de travail de l'employé
+            const otherEmployeeShifts = state.shifts.filter(s =>
+                s.employeeId === employeeId &&
+                s.type === 'travail' && // On ne vérifie que les chevauchements de travail
+                s.id !== shiftIdToExclude
+            );
+
+            // 2. Vérifier s'il y a un chevauchement
+            for (const existingShift of otherEmployeeShifts) {
+                const existingStart = dayjs(existingShift.start);
+                const existingEnd = dayjs(existingShift.end);
+
+                // La condition de chevauchement est:
+                // Le nouveau créneau commence AVANT la fin de l'existant
+                // ET
+                // Le nouveau créneau finit APRES le début de l'existant
+                const overlaps = proposedStart.isBefore(existingEnd) && proposedEnd.isAfter(existingStart);
+
+                if (overlaps) {
+                    return true; // Un chevauchement a été trouvé
+                }
+            }
+
+            return false; // Aucun chevauchement
+        };
+
+
+        /**
+         * Vérifie toutes les contraintes légales (annualisation, repos) pour tous les employés
+         * et affiche des alertes en haut à droite.
+         */
+        const checkAllLegalConstraints = () => {
+            const alertContainer = document.getElementById('alert-container');
+            alertContainer.innerHTML = ''; // Nettoyer les anciennes alertes
+            let alerts = [];
+
+            state.employees.forEach(employee => {
+                // 1. Vérification de l'annualisation (plafond 1607h)
+                const yearStart = state.currentDate.startOf('year');
+                const yearEnd = state.currentDate.endOf('year');
+                let annualizableHours = 0;
+
+                // Calcul des heures annualisables (semaine par semaine)
+                for(let week = 1; week <= 53; week++) {
+                    const weekStartDate = dayjs().year(state.currentDate.year()).isoWeek(week).startOf('isoWeek');
+                    const weekEndDate = weekStartDate.endOf('isoWeek');
+
+                    if (weekStartDate.isAfter(yearEnd)) break;
+                    
+                    const weeklyHours = calculateHoursForPeriod(employee.id, weekStartDate, weekEndDate);
+                    // On ajoute au max 42h (le surplus est H. Sup)
+                    annualizableHours += Math.min(weeklyHours, WEEKLY_HOUR_LIMIT_FOR_SUP);
+                }
+
+                if (annualizableHours > ANNUAL_HOUR_LIMIT) {
+                    alerts.push({
+                        type: 'error',
+                        message: `<strong>${employee.name}</strong> a dépassé le plafond annuel de ${ANNUAL_HOUR_LIMIT}h (${annualizableHours.toFixed(2)}h).`
+                    });
+                } else if (annualizableHours > ANNUAL_HOUR_LIMIT * 0.9) {
+                     alerts.push({ // Avertissement si on dépasse 90%
+                        type: 'warning',
+                        message: `<strong>${employee.name}</strong> approche du plafond annuel (${annualizableHours.toFixed(2)}h / ${ANNUAL_HOUR_LIMIT}h).`
+                    });
+                }
+                
+                // 2. Vérification du repos hebdomadaire (pour la semaine actuelle seulement)
+                const currentWeekStart = state.currentDate.startOf('isoWeek');
+                // Créneau factice pour identifier la semaine
+                const pseudoShift = { start: currentWeekStart.toISOString(), end: currentWeekStart.toISOString() }; 
+                if (!hasWeeklyRest(employee.id, pseudoShift, null)) {
+                     alerts.push({
+                        type: 'error',
+                        message: `<strong>${employee.name}</strong> : Repos hebdomadaire de ${MIN_CONSECUTIVE_REST_HOURS}h non respecté cette semaine.`
+                    });
+                }
+            });
+            
+            // Affichage des alertes
+            alerts.forEach(alert => displayAlert(alert.type, alert.message));
+        };
+        
+        /**
+         * Affiche une alerte (info, warning, error) en haut à droite de l'écran.
+         * L'alerte disparaît après 10 secondes.
+         */
+        const displayAlert = (type, message) => {
+            const alertColors = {
+                info: 'bg-blue-500',
+                warning: 'bg-yellow-500',
+                error: 'bg-red-500'
+            };
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `${alertColors[type]} text-white text-sm font-bold px-4 py-3 rounded-lg shadow-lg relative mb-2`;
+            alertDiv.innerHTML = `<span class="block sm:inline">${message}</span>`;
+            
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'absolute top-0 bottom-0 right-0 px-4 py-3';
+            closeBtn.innerHTML = '<span>&times;</span>';
+            closeBtn.onclick = () => alertDiv.remove();
+            
+            alertDiv.appendChild(closeBtn);
+            document.getElementById('alert-container').appendChild(alertDiv);
+            
+            // Auto-destruction de l'alerte
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 10000); // 10 secondes
+        };
+
+
+        /**
+         * NOUVELLE FONCTION (V22)
+         * Ouvre une modal de confirmation personnalisée au lieu de window.confirm().
+         * @param {string} message - Le message à afficher.
+         * @param {function} onConfirmCallback - La fonction à exécuter si l'utilisateur confirme.
+         */
+        const openConfirmModal = (message, onConfirmCallback) => {
+            confirmModalMessage.textContent = message;
+            // Stocke la fonction de rappel directement sur le bouton
+            confirmModalBtn.onclick = () => {
+                onConfirmCallback();
+                confirmModal.classList.add('hidden'); // Ferme la modal après confirmation
+            };
+            confirmModal.classList.remove('hidden');
+        };
+
+        // --- Fonctions de gestion des Modals (Ouverture/Fermeture) ---
+        
+        // Ouvre la modal de gestion des employés
+        const openEmployeeModal = () => {
+            renderEmployeeList(); // Rafraîchit la liste avant d'ouvrir
+            employeeModal.classList.remove('hidden');
+        };
+
+        /**
+         * Ouvre la modal d'ajout/édition de créneau.
+         * @param {string} date - La date (YYYY-MM-DD) si c'est une création.
+         * @param {number|null} shiftId - L'ID du créneau si c'est une édition.
+         * @param {number|null} preselectedEmployeeId - (V18) Pré-sélectionne cet employé.
+         */
+        const openShiftModal = (date, shiftId = null, preselectedEmployeeId = null) => {
+            shiftForm.reset();
+            // NOUVEAU: Réinitialiser le champ de duplication à chaque ouverture
+            document.getElementById('shift-duplicate').value = '0';
+            
+            // Remplit la liste déroulante des employés
+            const employeeSelect = document.getElementById('shift-employee');
+            employeeSelect.innerHTML = '';
+            state.employees.forEach(emp => {
+                const option = document.createElement('option');
+                option.value = emp.id;
+                option.textContent = emp.name;
+                employeeSelect.appendChild(option);
+            });
+            
+            if (shiftId) { // Mode Édition
+                const shift = state.shifts.find(s => s.id === shiftId);
+                shiftModalTitle.textContent = 'Modifier le Créneau';
+                document.getElementById('shift-id').value = shift.id;
+                document.getElementById('shift-employee').value = shift.employeeId;
+                document.getElementById('start-date').value = dayjs(shift.start).format('YYYY-MM-DD');
+                document.getElementById('start-time').value = dayjs(shift.start).format('HH:mm');
+                document.getElementById('end-date').value = dayjs(shift.end).format('YYYY-MM-DD');
+                document.getElementById('end-time').value = dayjs(shift.end).format('HH:mm');
+                document.getElementById('shift-type').value = shift.type;
+                deleteShiftBtn.classList.remove('hidden'); // Affiche le bouton Supprimer
+            } else { // Mode Création
+                shiftModalTitle.textContent = 'Ajouter un Créneau';
+                document.getElementById('shift-id').value = '';
+                document.getElementById('start-date').value = date;
+                document.getElementById('end-date').value = date;
+                // MODIFIÉ: Pré-remplir les champs d'heure avec des valeurs par défaut (07:00 / 15:00)
+                // Les minutes sont à "00" pour gagner du temps, comme demandé.
+                // L'utilisateur peut toujours taper "16" et cela deviendra "16:00".
+                document.getElementById('start-time').value = '07:00';
+                document.getElementById('end-time').value = '15:00';
+                deleteShiftBtn.classList.add('hidden'); // Cache le bouton Supprimer
+            }
+            
+            // NOUVEAU (V18): Gérer la pré-sélection depuis la Saisie Rapide
+            if (preselectedEmployeeId) {
+                document.getElementById('shift-employee').value = preselectedEmployeeId;
+            }
+            
+            shiftModal.classList.remove('hidden');
+            updateShiftDurationDisplay(); // Calcule la durée pour les créneaux existants
+        };
+        
+        // --- Fonctions d'Export ---
+
+        /**
+         * Exporte le récapitulatif MENSUEL en fichier Excel (.xlsx).
+         */
+        const exportMonthlySummaryToExcel = () => {
+            const monthStart = state.currentDate.startOf('month');
+            const monthEnd = state.currentDate.endOf('month');
+
+            const sheetData = [
+                // En-têtes
+                ['Employé', 'Heures Mois', 'H. Sup > 42h', 'Nuit (21-00h)', 'Nuit (00-06h)']
+            ];
+
+            // Données
+            state.employees.forEach(emp => {
+                const monthlyHours = calculateHoursForPeriod(emp.id, monthStart, monthEnd);
+                const supHours = calculateSupHours(emp.id, monthStart, monthEnd);
+                const nightHours = calculateNightHours(emp.id, monthStart, monthEnd);
+
+                sheetData.push([
+                    emp.name,
+                    monthlyHours.toFixed(2),
+                    supHours.toFixed(2),
+                    nightHours.nightHours21_00.toFixed(2),
+                    nightHours.nightHours00_06.toFixed(2)
+                ]);
+            });
+
+            const ws = XLSX.utils.aoa_to_sheet(sheetData); // Crée la feuille
+            ws['!cols'] = [{wch:25}, {wch:15}, {wch:15}, {wch:15}, {wch:15}]; // Définit la largeur des colonnes
+            const wb = XLSX.utils.book_new(); // Crée le classeur
+            XLSX.utils.book_append_sheet(wb, ws, `Recap ${state.currentDate.format('MMMM YYYY')}`);
+            XLSX.writeFile(wb, `Recap_Mois_${state.currentDate.format('MMMM_YYYY')}.xlsx`); // Télécharge
+        };
+
+        /**
+         * Exporte le récapitulatif ANNUEL (cumulé) en fichier Excel (.xlsx).
+         */
+        const exportAnnualSummaryToExcel = () => {
+            const yearStart = state.currentDate.startOf('year');
+            const yearEnd = state.currentDate.endOf('month'); // Cumulé jusqu'au mois en cours
+
+            const sheetData = [
+                // En-têtes
+                ['Employé', 'Heures Cumulées', 'H. Sup > 42h', 'Nuit (21-00h)', 'Nuit (00-06h)', 'Heures Annualisables']
+            ];
+
+            // Données
+            state.employees.forEach(emp => {
+                const annualHours = calculateHoursForPeriod(emp.id, yearStart, yearEnd);
+                const supHours = calculateSupHours(emp.id, yearStart, yearEnd);
+                const nightHours = calculateNightHours(emp.id, yearStart, yearEnd);
+                const annualizableHours = annualHours - supHours;
+
+                sheetData.push([
+                    emp.name,
+                    annualHours.toFixed(2),
+                    supHours.toFixed(2),
+                    nightHours.nightHours21_00.toFixed(2),
+                    nightHours.nightHours00_06.toFixed(2),
+                    `${annualizableHours.toFixed(2)} / ${ANNUAL_HOUR_LIMIT}`
+                ]);
+            });
+
+            const ws = XLSX.utils.aoa_to_sheet(sheetData);
+            ws['!cols'] = [{wch:25}, {wch:20}, {wch:15}, {wch:15}, {wch:15}, {wch:25}];
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, `Cumul ${state.currentDate.format('YYYY')}`);
+            XLSX.writeFile(wb, `Recap_Annuel_Jan-${state.currentDate.format('MMM')}_${state.currentDate.year()}.xlsx`);
+        };
+
+        // --- NOUVELLES FONCTIONS POUR L'EXPORT IMAGE (PNG) ---
+
+        /**
+         * Génère le HTML pour le planning individuel (format "imprimable").
+         */
+        const renderEmployeeScheduleForImage = (employeeId) => {
+            const employee = state.employees.find(e => e.id === employeeId);
+            if (!employee) return '';
+
+            const monthStart = state.currentDate.startOf('month');
+            const monthEnd = state.currentDate.endOf('month');
+
+            const shiftsForMonth = state.shifts.filter(s =>
+                s.employeeId === employeeId &&
+                dayjs(s.start).isBefore(monthEnd) &&
+                dayjs(s.end).isAfter(monthStart)
+            );
+
+            // Structure HTML simplifiée pour l'image
+            let html = `<div class="p-4">
+                <h2 class="text-2xl font-bold text-center mb-2">${employee.name}</h2>
+                <h3 class="text-xl text-center text-gray-600 mb-6">${state.currentDate.format('MMMM YYYY')}</h3>
+                
+                <div id="image-export-schedule" class="grid grid-cols-7">
+                    <div class="font-bold text-center border-b pb-1">Lun</div>
+                    <div class="font-bold text-center border-b pb-1">Mar</div>
+                    <div class="font-bold text-center border-b pb-1">Mer</div>
+                    <div class="font-bold text-center border-b pb-1">Jeu</div>
+                    <div class="font-bold text-center border-b pb-1">Ven</div>
+                    <div class="font-bold text-center border-b pb-1">Sam</div>
+                    <div class="font-bold text-center border-b pb-1">Dim</div>`;
+
+            let calendarStart = monthStart.startOf('isoWeek');
+            for(let i = 0; i < 42; i++) {
+                const day = calendarStart.add(i, 'day');
+                // Optimisation: Arrêter si on est sur la dernière ligne et déjà dans le mois suivant
+                if (day.month() !== monthStart.month() && i > 28) break; 
+
+                const isCurrentMonth = day.month() === monthStart.month();
+                html += `<div class="day ${isCurrentMonth ? '' : 'bg-gray-50'}">
+                    <div class="day-number ${isCurrentMonth ? '' : 'text-gray-300'}">${day.date()}</div>`;
+                
+                // Filtre les créneaux juste pour ce jour
+                const shiftsForDay = shiftsForMonth.filter(s => day.isBetween(dayjs(s.start).startOf('day'), dayjs(s.end).endOf('day'), null, '[]'));
+                
+                shiftsForDay.forEach(shift => {
+                    const start = dayjs(shift.start);
+                    const end = dayjs(shift.end);
+                    const bgColor = shift.type === 'travail' ? employee.color : LEAVE_COLOR;
+                    html += `<div class="shift" style="background-color: ${bgColor};">
+                        ${start.format('HH:mm')} - ${end.format('HH:mm')} (${shift.type === 'travail' ? 'T' : 'C'})
+                    </div>`;
+                });
+
+                html += `</div>`;
+            }
+
+            html += `</div></div>`;
+            return html;
+        };
+        
+        /**
+         * Ouvre la modal d'export image et injecte le planning individuel.
+         */
+        const openImageExportModal = (employeeId) => {
+            const content = document.getElementById('image-export-content');
+            content.innerHTML = renderEmployeeScheduleForImage(employeeId); // Génère le HTML
+            downloadPngBtn.dataset.employeeId = employeeId; // Stocke l'ID pour le téléchargement
+            imageExportModal.classList.remove('hidden');
+        };
+
+        /**
+         * Gère le clic sur "Télécharger (PNG)".
+         * Utilise html2canvas pour convertir le HTML injecté en image.
+         */
+        const handleDownloadPng = async () => {
+            const employeeId = parseInt(downloadPngBtn.dataset.employeeId);
+            const employee = state.employees.find(e => e.id === employeeId);
+            const content = document.getElementById('image-export-content');
+
+            // Feedback visuel pendant la génération
+            const originalText = downloadPngBtn.textContent;
+            downloadPngBtn.textContent = 'Génération...';
+            downloadPngBtn.disabled = true;
+
+            try {
+                // Conversion HTML -> Canvas
+                const canvas = await html2canvas(content, {
+                    scale: 2, // Améliore la résolution
+                    backgroundColor: '#ffffff' // Fond blanc
+                });
+                // Création d'un lien de téléchargement
+                const link = document.createElement('a');
+                link.download = `Planning-${employee.name.replace(' ', '_')}-${state.currentDate.format('MMMM-YYYY')}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click(); // Simule le clic
+            } catch (error) {
+                console.error("Erreur lors de la génération de l'image:", error);
+                displayAlert('error', "Impossible de générer l'image.");
+            } finally {
+                 // Rétablir le bouton
+                downloadPngBtn.textContent = originalText;
+                downloadPngBtn.disabled = false;
+                imageExportModal.classList.add('hidden'); // Ferme la modal après téléchargement
+            }
+        };
+
+
+        // --- Gestionnaires d'Événements (Interactions Utilisateur) ---
+        
+        // --- GESTIONNAIRES POUR LE CALCUL DE DURÉE (Modal Créneau) ---
+        const startDateInput = document.getElementById('start-date');
+        const startTimeInput = document.getElementById('start-time');
+        const endDateInput = document.getElementById('end-date');
+        const endTimeInput = document.getElementById('end-time');
+        const durationDisplay = document.getElementById('shift-duration-display');
+
+        /**
+         * Met à jour l'affichage de la durée totale dans la modal
+         * à chaque modification des champs date/heure.
+         */
+        const updateShiftDurationDisplay = () => {
+            const startDate = startDateInput.value;
+            const startTime = startTimeInput.value;
+            const endDate = endDateInput.value;
+            const endTime = endTimeInput.value;
+
+            if (startDate && startTime && endDate && endTime) {
+                const start = dayjs(`${startDate}T${startTime}`);
+                const end = dayjs(`${endDate}T${endTime}`);
+
+                if (end.isAfter(start)) {
+                    const duration = end.diff(start, 'hour', true);
+                    durationDisplay.textContent = `Durée totale : ${duration.toFixed(2)} heures`;
+                } else {
+                    durationDisplay.textContent = 'La fin doit être après le début.';
+                }
+            } else {
+                durationDisplay.textContent = ''; // Vide si les champs ne sont pas remplis
+            }
+        };
+        
+        // Attache le gestionnaire aux 4 champs
+        startDateInput.addEventListener('input', updateShiftDurationDisplay);
+        startTimeInput.addEventListener('input', updateShiftDurationDisplay);
+        endDateInput.addEventListener('input', updateShiftDurationDisplay);
+        endTimeInput.addEventListener('input', updateShiftDurationDisplay);
+
+
+        // NOUVEAU (V24): GESTIONNAIRES POUR LA MODALE DE CONFIGURATION DE SEMAINE
+
+        // Variable pour stocker la semaine en cours d'édition
+        let currentEditingWeekIdentifier = null;
+
+        /**
+         * Ouvre la modale de configuration des slots pour une semaine donnée.
+         */
+        const openWeekConfigModal = (weekIdentifier, weekStart) => {
+            currentEditingWeekIdentifier = weekIdentifier;
+            const weekNum = parseInt(weekIdentifier.split('-W')[1]);
+            const year = parseInt(weekIdentifier.split('-W')[0]);
+            
+            weekConfigModalTitle.textContent = `Configurer les Slots de la Semaine ${weekNum} (${year})`;
+
+            // Récupère la config (ou la config par défaut)
+            const config = state.slotConfigurations[weekIdentifier] || JSON.parse(JSON.stringify(DEFAULT_SLOT_CONFIG)); // Copie profonde
+
+            // Peuple la modale avec les 4 lignes et leurs slots
+            for (let i = 1; i <= 4; i++) {
+                const lineKey = `line${i}`;
+                const lineContainer = document.getElementById(`config-line-${i}`).querySelector('.slot-config-inputs');
+                lineContainer.innerHTML = ''; // Nettoie les anciens inputs
+                
+                config[lineKey].forEach(slot => {
+                    lineContainer.appendChild(createSlotConfigInputGroup(slot.start, slot.end, slot.endDay));
+                });
+            }
+
+            // Peuple la liste déroulante de duplication
+            configDuplicateUntilWeek.innerHTML = '';
+            configStartWeekLabel.textContent = weekNum + 1;
+            const maxWeek = dayjs(weekStart).endOf('year').isoWeek(); // 52 ou 53
+            for (let w = weekNum + 1; w <= maxWeek; w++) {
+                const option = document.createElement('option');
+                option.value = w;
+                option.textContent = w;
+                configDuplicateUntilWeek.appendChild(option);
+            }
+            // Sélectionne la dernière semaine par défaut
+            if (configDuplicateUntilWeek.options.length > 0) {
+                 configDuplicateUntilWeek.value = maxWeek;
+            }
+            configDuplicateNextWeek.checked = false; // Réinitialise
+
+            weekConfigModal.classList.remove('hidden');
+        };
+
+        /**
+         * Crée un groupe d'inputs (start, end, endDay) pour la modale de config.
+         */
+        const createSlotConfigInputGroup = (start, end, endDay) => {
+            const group = document.createElement('div');
+            group.className = 'slot-config-group';
+            
+            const startInput = document.createElement('input');
+            startInput.type = 'time';
+            startInput.className = 'slot-start-time';
+            startInput.value = start;
+            startInput.required = true;
+
+            const endInput = document.createElement('input');
+            endInput.type = 'time';
+            endInput.className = 'slot-end-time';
+            endInput.value = end;
+            endInput.required = true;
+            
+            // Le endDay (0 ou 1) est géré par un petit select
+            const endDaySelect = document.createElement('select');
+            endDaySelect.className = 'slot-end-day bg-gray-800 text-xs';
+            endDaySelect.innerHTML = `<option value="0">J</option><option value="1">J+1</option>`;
+            endDaySelect.value = endDay || '0';
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'slot-config-remove-btn';
+            removeBtn.innerHTML = '&times;'; // '×'
+            removeBtn.onclick = () => group.remove(); // Supprime le groupe
+
+            group.appendChild(startInput);
+            group.appendChild(document.createTextNode(' - '));
+            group.appendChild(endInput);
+            group.appendChild(endDaySelect);
+            group.appendChild(removeBtn);
+            
+            return group;
+        };
+
+        // Gestionnaire de clic pour "Ajouter Slot" dans la modale de config
+        weekConfigForm.addEventListener('click', (e) => {
+            if (e.target.classList.contains('add-slot-btn')) {
+                const line = e.target.dataset.line;
+                const container = document.getElementById(`config-line-${line}`).querySelector('.slot-config-inputs');
+                if (container.children.length < 5) { // Limite à 5 slots
+                    container.appendChild(createSlotConfigInputGroup('00:00', '00:00', '0'));
+                } else {
+                    displayAlert('warning', 'Limite de 5 slots par ligne atteinte.');
+                }
+            }
+        });
+
+        // Fermer la modale de config
+        closeWeekConfigModalBtn.addEventListener('click', () => {
+            weekConfigModal.classList.add('hidden');
+            currentEditingWeekIdentifier = null;
+        });
+
+        // Réinitialiser la config de la semaine (revient au 3x8)
+        resetWeekConfigBtn.addEventListener('click', () => {
+            if (!currentEditingWeekIdentifier) return;
+            
+            openConfirmModal("Voulez-vous réinitialiser cette semaine à la configuration 3x8 par défaut ?", () => {
+                // Supprime la config spécifique de la semaine (elle utilisera le défaut)
+                delete state.slotConfigurations[currentEditingWeekIdentifier];
+                saveState();
+                renderCalendar(); // Redessine
+                weekConfigModal.classList.add('hidden');
+                currentEditingWeekIdentifier = null;
+            });
+        });
+
+        // Sauvegarder la nouvelle configuration de la semaine
+        saveWeekConfigBtn.addEventListener('click', () => {
+            if (!currentEditingWeekIdentifier) return;
+
+            const newConfig = { line1: [], line2: [], line3: [], line4: [] };
+            let isValid = true;
+
+            // 1. Lire toutes les lignes de la modale
+            for (let i = 1; i <= 4; i++) {
+                const lineKey = `line${i}`;
+                const lineContainer = document.getElementById(`config-line-${i}`).querySelector('.slot-config-inputs');
+                const slotGroups = lineContainer.querySelectorAll('.slot-config-group');
+                
+                if (slotGroups.length === 0) continue; // Ligne vide
+
+                slotGroups.forEach(group => {
+                    const start = group.querySelector('.slot-start-time').value;
+                    const end = group.querySelector('.slot-end-time').value;
+                    const endDay = group.querySelector('.slot-end-day').value;
+                    
+                    if (!start || !end) isValid = false;
+                    
+                    newConfig[lineKey].push({ start, end, endDay });
+                });
+            }
+
+            if (!isValid) {
+                displayAlert('error', 'Veuillez remplir toutes les heures de début et de fin.');
+                return;
+            }
+
+            // 2. Sauvegarder la config pour la semaine actuelle
+            state.slotConfigurations[currentEditingWeekIdentifier] = newConfig;
+            
+            const currentYear = parseInt(currentEditingWeekIdentifier.split('-W')[0]);
+            const currentWeekNum = parseInt(currentEditingWeekIdentifier.split('-W')[1]);
+
+            // 3. Gérer la duplication (si cochée)
+            if (configDuplicateNextWeek.checked) {
+                const nextWeekNum = currentWeekNum + 1;
+                const maxWeek = dayjs().year(currentYear).endOf('year').isoWeek();
+                if (nextWeekNum <= maxWeek) {
+                    const nextWeekIdentifier = `${currentYear}-W${nextWeekNum}`;
+                    state.slotConfigurations[nextWeekIdentifier] = newConfig;
+                }
+            }
+
+            // 4. Gérer la duplication "Jusqu'à"
+            const duplicateUntil = parseInt(configDuplicateUntilWeek.value);
+            // Vérifie qu'une valeur est sélectionnée (et qu'il y a des options)
+            if (!isNaN(duplicateUntil) && configDuplicateUntilWeek.options.length > 0) {
+                for (let w = currentWeekNum + 1; w <= duplicateUntil; w++) {
+                    const weekIdentifier = `${currentYear}-W${w}`;
+                    state.slotConfigurations[weekIdentifier] = newConfig;
+                }
+            }
+            
+            saveState();
+            renderCalendar(); // Redessine tout
+            weekConfigModal.classList.add('hidden');
+            currentEditingWeekIdentifier = null;
+            displayAlert('info', 'Configuration de la semaine enregistrée.');
+        });
+
+
+        // --- GESTIONNAIRES POUR LE GLISSER-DEPOSER (Drag & Drop) ---
+        
+        /**
+         * Début du glissement (POUR UN CRÉNEAU EXISTANT).
+         * Se déclenche quand on saisit un .shift-bar.
+         */
+        const handleDragStart = (e) => {
+            // CORRECTION (FIX ERREUR): e.target peut être un nœud texte (l'initiale "J", "M", etc.).
+            // Un nœud texte n'a pas de méthode .closest().
+            // On vérifie donc si la cible est un élément (nodeType 1).
+            // Si ce n'est pas le cas (ex: nœud texte, nodeType 3), on utilise son parentElement.
+            const targetElement = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+            const shiftBar = targetElement.closest('.shift-bar');
+            
+            if (!shiftBar) return; // Si on ne glisse pas un créneau, ne rien faire.
+            
+            // Ajoute la classe au conteneur principal (pour le CSS pointer-events: none)
+            calendarGrid.classList.add('shift-dragging');
+            // Style visuel pour la barre glissée
+            shiftBar.classList.add('dragging'); 
+            
+            e.dataTransfer.setData('text/plain', shiftBar.dataset.shiftId); // Stocke l'ID du créneau
+            e.dataTransfer.effectAllowed = 'copyMove';
+        };
+
+        /**
+         * Survol d'une zone de dépôt valide (GÈRE LES DEUX CAS : employé et créneau).
+         * C'est ici qu'on gère le feedback visuel (highlight des cibles).
+         */
+        const handleDragOver = (e) => {
+            e.preventDefault(); 
+            
+            // Détecte quel type d'élément est glissé
+            const isEmployeeDrag = e.dataTransfer.types.includes('application/employee-id');
+            const isShiftDrag = e.dataTransfer.types.includes('text/plain');
+            // NOUVEAU (V18): Détecter le glissement depuis la Saisie Rapide
+            const isQuickAddDrag = e.dataTransfer.types.includes('application/quick-add');
+
+            // Cible : un slot prédéfini ? (Valide pour les 3 cas)
+            const predefinedSlot = e.target.closest('.predefined-slot-bar');
+            if (predefinedSlot) { 
+                // Affiche l'effet (copie ou déplacement)
+                // MODIFIÉ (V18): La Saisie Rapide est toujours une 'copie'
+                e.dataTransfer.dropEffect = (isEmployeeDrag || isQuickAddDrag) ? 'copy' : (e.ctrlKey ? 'copy' : 'move'); 
+                predefinedSlot.classList.add('drag-over-slot'); // Highlight du slot
+                // Nettoie les autres highlights (si on passe d'une case à un slot)
+                document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+                return;
+            }
+
+            // Cible : une case de jour (INTERDIT PAR LE PROMPT POUR LE DROP)
+            const dayCell = e.target.closest('.calendar-day-slot-container');
+            if (dayCell && isShiftDrag) {
+                // NOTE: On pourrait désactiver ce highlight visuel (drag-over) pour
+                // renforcer la Règle d'Or, mais il est désactivé au niveau du handleDrop.
+                // On le garde pour l'instant car il n'impacte pas la logique de dépôt.
+                dayCell.classList.add('drag-over');
+                e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+                // Nettoie les highlights des slots
+                document.querySelectorAll('.drag-over-slot').forEach(el => el.classList.remove('drag-over-slot'));
+                return;
+            }
+            
+            // Si on ne survole rien de valide, nettoyer
+            handleDragLeave(e);
+        };
+
+        /**
+         * Quitte une zone de dépôt (GÈRE LES DEUX CAS).
+         * Nettoie le feedback visuel.
+         */
+        const handleDragLeave = (e) => {
+            const dayCell = e.target.closest('.calendar-day-slot-container');
+            if (dayCell) {
+                dayCell.classList.remove('drag-over');
+            }
+            const predefinedSlot = e.target.closest('.predefined-slot-bar');
+            if (predefinedSlot) {
+                predefinedSlot.classList.remove('drag-over-slot');
+            }
+        };
+        
+        /**
+         * Fonction de nettoyage centralisée.
+         * Appelée à la fin d'un 'drop' ou d'un 'dragend' (annulation).
+         */
+        const cleanupDragState = () => {
+            // Retire les classes globales (pour pointer-events)
+            calendarGrid.classList.remove('employee-dragging');
+            calendarGrid.classList.remove('shift-dragging');
+            // NOUVEAU (V18)
+            calendarGrid.classList.remove('quick-add-dragging');
+            
+            // Nettoie l'élément de créneau
+            const draggingElement = document.querySelector('.shift-bar.dragging');
+            if (draggingElement) {
+                draggingElement.classList.remove('dragging');
+            }
+            
+            // Nettoie l'élément employé
+            const draggingEmp = summaryContainer.querySelector('.draggable-employee.dragging');
+            if (draggingEmp) {
+                draggingEmp.classList.remove('dragging');
+            }
+            
+            // NOUVEAU (V18): Nettoie l'élément de saisie rapide
+            const draggingQuickAdd = quickAddContainer.querySelector('.quick-add-btn.dragging');
+            if (draggingQuickAdd) {
+                draggingQuickAdd.classList.remove('dragging');
+            }
+
+            // Nettoie toutes les cibles de dépôt (slots et cases)
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            document.querySelectorAll('.drag-over-slot').forEach(el => el.classList.remove('drag-over-slot'));
+        };
+
+        /**
+         * Fin du glissement (qu'il y ait eu dépôt ou non).
+         * Gère les annulations (ex: touche Echap).
+         */
+        const handleDragEnd = (e) => {
+            // Nettoyage générique
+            cleanupDragState();
+        };
+
+        /**
+         * Dépôt (Drop) - C'est la fonction la plus importante.
+         * GÈRE LES DEUX CAS (employé et créneau).
+         */
+        const handleDrop = (e) => {
+            e.preventDefault();
+            
+            const isEmployeeDrag = e.dataTransfer.types.includes('application/employee-id');
+            const isShiftDrag = e.dataTransfer.types.includes('text/plain');
+            // NOUVEAU (V18)
+            const isQuickAddDrag = e.dataTransfer.types.includes('application/quick-add');
+
+            // --- CAS 1: Dépôt sur un slot prédéfini (LE SEUL CAS AUTORISÉ) ---
+            const predefinedSlot = e.target.closest('.predefined-slot-bar');
+            
+            // MODIFIÉ (V18): Accepte les 3 types de glissement
+            if (predefinedSlot && (isEmployeeDrag || isShiftDrag || isQuickAddDrag)) { 
+                predefinedSlot.classList.remove('drag-over-slot');
+                
+                // Récupère les horaires du slot (7-15, 15-23, ou 23-7)
+                // MODIFIÉ (V24): Lit la nouvelle structure de dataset
+                const { startDate, endDate, startTime, endTime } = predefinedSlot.dataset;
+
+                // VÉRIFICATION (Demande utilisateur): Bloquer le dépôt avant la date de début
+                const targetDay = dayjs(startDate);
+                if (targetDay.isBefore(PLANNING_START_DATE, 'day')) {
+                    displayAlert('warning', `Le dépôt n'est pas autorisé avant le ${PLANNING_START_DATE.format('DD/MM/YYYY')}.`);
+                    cleanupDragState();
+                    return; // Arrêter l'opération
+                }
+
+                // Initialisation des variables
+                let originalShift = null;
+                let isDuplication = e.ctrlKey; // Copie si Ctrl est pressée
+                let shiftIdToExclude = null; // Pour les vérifications (ignorer le créneau qu'on déplace)
+                
+                // NOUVEAU (V18): Préparation pour la création en série
+                let shiftsToCreate = [];
+                let employeeId; // Doit être déclaré ici pour être accessible à tous les blocs
+
+                if (isEmployeeDrag) {
+                    // Si on glisse un employé, c'est toujours une création
+                    employeeId = parseInt(e.dataTransfer.getData('application/employee-id'));
+                    isDuplication = true; 
+                } else if (isShiftDrag) { // isShiftDrag
+                    // Si on glisse un créneau
+                    const shiftId = parseInt(e.dataTransfer.getData('text/plain'));
+                    originalShift = state.shifts.find(s => s.id === shiftId);
+                    if (!originalShift) return;
+                    employeeId = originalShift.employeeId;
+                    if (!isDuplication) { // Si c'est un déplacement (pas Ctrl)
+                        shiftIdToExclude = shiftId; // On l'exclut des calculs de repos/limite
+                    }
+                }
+                
+                // MODIFIÉ (V18): Logique déplacée
+                // Le `newShiftData` est maintenant préparé DANS les blocs
+                
+                // --- VÉRIFICATION DES RÈGLES MÉTIER AVANT DÉPÔT ---
+                
+                // NOUVEAU (V18): Cas Saisie Rapide (plusieurs créneaux)
+                if (isQuickAddDrag) {
+                    employeeId = parseInt(e.dataTransfer.getData('application/employee-id'));
+                    const days = parseInt(e.dataTransfer.getData('application/days'));
+                    
+                    // Boucle pour valider tous les jours de la série
+                    for (let i = 0; i < days; i++) {
+                        // MODIFIÉ (V24): Gère les slots à cheval (ex: 23-7)
+                        const currentStartDate = dayjs(startDate).add(i, 'day');
+                        const currentEndDate = dayjs(endDate).add(i, 'day');
+                        
+                        // Ignorer les jours qui tombent avant la date de début autorisée
+                        if (currentStartDate.isBefore(PLANNING_START_DATE, 'day')) {
+                            displayAlert('warning', `Créneau ignoré le ${currentStartDate.format('DD/MM')} (avant la date autorisée).`);
+                            continue;
+                        }
+
+                        // MODIFIÉ (V24): Utilise les startTime/endTime
+                        const newShiftData = {
+                            employeeId: employeeId,
+                            start: currentStartDate.hour(dayjs(`${startDate}T${startTime}`).hour()).minute(dayjs(`${startDate}T${startTime}`).minute()).toISOString(),
+                            end: currentEndDate.hour(dayjs(`${endDate}T${endTime}`).hour()).minute(dayjs(`${endDate}T${endTime}`).minute()).toISOString(),
+                            type: 'travail',
+                        };
+
+                        // Validation (on exclut 'null' car ce sont de nouvelles créations)
+                        if (isOverlappingExistingShift(employeeId, newShiftData, null)) {
+                             displayAlert('error', `Chevauchement détecté le ${currentStartDate.format('DD/MM')}. Opération annulée.`);
+                             cleanupDragState();
+                             return;
+                        }
+                        if (isOverDailyHourLimit(employeeId, newShiftData, null)) {
+                            displayAlert('error', `Limite 10h/24h atteinte le ${currentStartDate.format('DD/MM')}. Opération annulée.`);
+                            cleanupDragState();
+                            return;
+                        }
+                        if (!hasWeeklyRest(employeeId, newShiftData, null)) {
+                            displayAlert('error', `Repos 36h non respecté pour la semaine du ${currentStartDate.format('DD/MM')}. Opération annulée.`);
+                            cleanupDragState();
+                            return;
+                        }
+                        
+                        // Si valide, ajouter au lot
+                        shiftsToCreate.push(newShiftData);
+                    }
+                    
+                    // Appliquer les changements (création en série)
+                    shiftsToCreate.forEach((shiftData, index) => {
+                        shiftData.id = Date.now() + index; // ID unique
+                        state.shifts.push(shiftData);
+                    });
+
+                } else { // Cas original (Employé unique ou Créneau unique)
+                    
+                    // MODIFIÉ (V24): Utilise les startTime/endTime
+                    const newShiftData = {
+                        employeeId: employeeId,
+                        start: dayjs(`${startDate}T${startTime}`).toISOString(),
+                        end: dayjs(`${endDate}T${endTime}`).toISOString(),
+                        type: 'travail',
+                    };
+                    
+                    // Validation
+                    if (isOverDailyHourLimit(newShiftData.employeeId, newShiftData, shiftIdToExclude)) {
+                        displayAlert('error', "Le maximum d'heures autorisées par jour est atteint.");
+                        cleanupDragState();
+                        return;
+                    }
+                    if (!hasWeeklyRest(newShiftData.employeeId, newShiftData, shiftIdToExclude)) {
+                        displayAlert('error', 'Repos hebdomadaire non respecté.');
+                        cleanupDragState();
+                        return;
+                    }
+                    // NOUVEAU (V18): Ajout de la validation de chevauchement pour le D&D simple
+                    if (isOverlappingExistingShift(newShiftData.employeeId, newShiftData, shiftIdToExclude)) {
+                         displayAlert('error', `Chevauchement détecté le ${dayjs(newShiftData.start).format('DD/MM')}. Opération annulée.`);
+                         cleanupDragState();
+                         return;
+                    }
+                    
+                    // Appliquer les changements (créneau unique)
+                    if (isDuplication) { // Création (drop d'employé) ou Copie (drop de créneau + Ctrl)
+                        newShiftData.id = Date.now(); // Nouvel ID
+                        state.shifts.push(newShiftData);
+                    } else { // Déplacement (drop de créneau sans Ctrl)
+                        const shiftIndex = state.shifts.findIndex(s => s.id === originalShift.id);
+                        if (shiftIndex > -1) {
+                            // Met à jour le créneau existant avec les nouvelles heures du slot
+                            state.shifts[index].start = newShiftData.start;
+                            state.shifts[index].end = newShiftData.end;
+                            state.shifts[index].type = newShiftData.type; 
+                        }
+                    }
+                }
+
+                saveState(); // Sauvegarde
+                renderCalendar(); // Redessine tout
+                cleanupDragState(); // Nettoie l'état du D&D
+                return; // Fin de l'opération
+            }
+
+            // --- CAS 2: Dépôt sur autre chose (case jour, etc.) ---
+            // Le prompt l'interdit. Comme il n'y a pas de 'else if' pour gérer ce cas,
+            // rien ne se passe, ce qui respecte l'exigence.
+            // On nettoie juste l'état du D&D.
+            cleanupDragState();
+        };
+
+        // Attache les gestionnaires D&D au conteneur principal de la grille
+        calendarGrid.addEventListener('dragstart', handleDragStart);
+        calendarGrid.addEventListener('dragover', handleDragOver);
+        calendarGrid.addEventListener('dragleave', handleDragLeave);
+        calendarGrid.addEventListener('dragend', handleDragEnd);
+        calendarGrid.addEventListener('drop', handleDrop);
+
+        // NOUVEAU (V21): Gestionnaire de clic pour la grille (pour la suppression de semaine)
+        // MODIFIÉ (V22): Remplacement de window.confirm() par la modal personnalisée
+        // MODIFIÉ (V24): Ajout du clic pour le bouton de configuration
+        calendarGrid.addEventListener('click', (e) => {
+            const deleteBtn = e.target.closest('.delete-week-btn');
+            const configBtn = e.target.closest('.config-week-btn');
+            
+            // Cas 1: Clic sur le bouton de suppression de semaine
+            if (deleteBtn) {
+                e.stopPropagation(); // Empêche d'autres clics
+                
+                const weekStart = dayjs(deleteBtn.dataset.weekStart).startOf('day');
+                const weekEnd = dayjs(deleteBtn.dataset.weekEnd).endOf('day');
+                const weekNum = weekStart.isoWeek();
+                const message = `Voulez-vous vraiment supprimer tous les créneaux de la semaine ${weekNum} ?\n(Du ${weekStart.format('DD/MM')} au ${weekEnd.format('DD/MM')})`;
+
+                // NOUVEAU (V22): Ouvre la modal de confirmation au lieu de bloquer
+                openConfirmModal(message, () => {
+                    // --- Début de la logique de suppression (exécutée sur confirmation) ---
+                    const effectiveWeekStart = dayjs.max(weekStart, PLANNING_START_DATE);
+
+                    // Vérifie s'il y a quelque chose à supprimer dans la plage autorisée
+                    if (weekEnd.isBefore(effectiveWeekStart)) {
+                        displayAlert('info', 'Aucun créneau à supprimer dans la plage autorisée.');
+                        return;
+                    }
+                    
+                    // Filtrer les créneaux:
+                    // On garde ceux qui se terminent AVANT le début de la suppression
+                    // OU qui commencent APRES la fin de la semaine.
+                    state.shifts = state.shifts.filter(shift => {
+                        const shiftStart = dayjs(shift.start);
+                        const shiftEnd = dayjs(shift.end);
+                        
+                        // Le créneau est-il en dehors de la plage de suppression ?
+                        const isBefore = shiftEnd.isBefore(effectiveWeekStart) || shiftEnd.isSame(effectiveWeekStart);
+                        const isAfter = shiftStart.isAfter(weekEnd) || shiftStart.isSame(weekEnd);
+                        
+                        return isBefore || isAfter;
+                    });
+                    
+                    saveState();
+                    renderCalendar(); // Redessine le calendrier
+                    displayAlert('info', `Tous les créneaux de la semaine ${weekNum} ont été supprimés.`);
+                    // --- Fin de la logique de suppression ---
+                });
+            }
+
+            // NOUVEAU (V24): Clic sur le bouton de configuration de semaine
+            if (configBtn) {
+                e.stopPropagation();
+                const weekIdentifier = configBtn.dataset.weekIdentifier;
+                const weekStart = configBtn.dataset.weekStart;
+                openWeekConfigModal(weekIdentifier, weekStart);
+            }
+        });
+
+        /**
+         * Gestionnaire pour le glissement d'un employé DEPUIS LE RÉCAPITULATIF.
+         */
+        const handleEmployeeDragStart = (e) => {
+            const empCell = e.target.closest('.draggable-employee');
+            if (empCell) {
+                // Ajoute la classe globale (pour pointer-events: none)
+                calendarGrid.classList.add('employee-dragging');
+                // Stocke l'ID de l'employé
+                e.dataTransfer.setData('application/employee-id', empCell.dataset.employeeId);
+                e.dataTransfer.effectAllowed = 'copy';
+                // Style visuel
+                setTimeout(() => {
+                    empCell.classList.add('dragging');
+                }, 0);
+            }
+        };
+        // Attache le gestionnaire au footer (récapitulatifs)
+        summaryContainer.addEventListener('dragstart', handleEmployeeDragStart);
+        summaryContainer.addEventListener('dragend', (e) => {
+            // Gère les drags d'employés annulés
+            cleanupDragState();
+        });
+        
+        // --- NOUVEAU (V18): GESTIONNAIRES POUR LA SAISIE RAPIDE ---
+
+        /**
+         * (V18) Démarrage du glissement d'un bouton de Saisie Rapide (2j, 3j...)
+         */
+        const handleQuickAddDragStart = (e) => {
+            const quickBtn = e.target.closest('.quick-add-btn');
+            if (quickBtn) {
+                // Ajoute la classe globale (pour pointer-events: none)
+                calendarGrid.classList.add('quick-add-dragging');
+                
+                // Stocke les données nécessaires
+                e.dataTransfer.setData('application/quick-add', 'true'); // Type custom
+                e.dataTransfer.setData('application/employee-id', quickBtn.dataset.employeeId);
+                e.dataTransfer.setData('application/days', quickBtn.dataset.days);
+                
+                e.dataTransfer.effectAllowed = 'copy';
+                
+                // Style visuel (léger délai pour que le navigateur crée "l'image fantôme")
+                setTimeout(() => {
+                    quickBtn.classList.add('dragging');
+                }, 0);
+            }
+        };
+        
+        /**
+         * (V18) Clic sur le bouton '+' de la Saisie Rapide
+         */
+        const handleQuickAddClick = (e) => {
+            const manualAddBtn = e.target.closest('.quick-add-manual-btn');
+            if (manualAddBtn) {
+                const employeeId = parseInt(manualAddBtn.dataset.employeeId);
+                
+                // Ouvre la modal:
+                // - Pas de date (l'utilisateur la choisira)
+                // - Pas de shiftId (c'est une création)
+                // - Pré-sélectionne l'employé
+                openShiftModal(state.currentDate.format('YYYY-MM-DD'), null, employeeId);
+            }
+        };
+
+        // Attache les gestionnaires au conteneur de Saisie Rapide
+        quickAddContainer.addEventListener('dragstart', handleQuickAddDragStart);
+        quickAddContainer.addEventListener('dragend', (e) => {
+            // Gère les drags de saisie rapide annulés
+            cleanupDragState();
+        });
+        quickAddContainer.addEventListener('click', handleQuickAddClick);
+
+
+        // --- AUTRES GESTIONNAIRES (Navigation, Modals, Forms) ---
+
+        // Navigation annuelle
+        prevYearBtn.addEventListener('click', () => {
+            state.currentDate = state.currentDate.subtract(1, 'year');
+            renderCalendar();
+        });
+        nextYearBtn.addEventListener('click', () => {
+            state.currentDate = state.currentDate.add(1, 'year');
+            renderCalendar();
+        });
+
+        // Navigation par onglets de mois
+        monthTabsContainer.addEventListener('click', (e) => {
+            const tab = e.target.closest('.month-tab');
+            if (tab) {
+                const month = parseInt(tab.dataset.month);
+                state.currentDate = state.currentDate.month(month);
+                renderCalendar(); // Redessine pour le nouveau mois
+            }
+        });
+        
+        // Modals (Ouverture / Fermeture)
+        manageEmployeesBtn.addEventListener('click', openEmployeeModal);
+        closeEmployeeModalBtn.addEventListener('click', () => employeeModal.classList.add('hidden'));
+        closeShiftModalBtn.addEventListener('click', () => shiftModal.classList.add('hidden'));
+
+        // Modals d'export image
+        downloadPngBtn.addEventListener('click', handleDownloadPng);
+        closeImageExportModalBtn.addEventListener('click', () => imageExportModal.classList.add('hidden'));
+
+        // Clic sur l'icône "Imprimante" (Export PNG) dans le récap mensuel
+        // Utilise la délégation d'événements car le contenu est dynamique
+        document.getElementById('summary-content').addEventListener('click', (e) => {
+            const pngBtn = e.target.closest('.generate-png-btn');
+            if (pngBtn) {
+                const employeeId = parseInt(pngBtn.dataset.employeeId);
+                openImageExportModal(employeeId);
+            }
+        });
+        
+        // Clic sur l'icône "Exporter" (Excel Mensuel)
+        document.getElementById('export-monthly-summary-btn').addEventListener('click', exportMonthlySummaryToExcel);
+        
+        // Clic sur l'icône "Exporter" (Excel Annuel)
+        document.getElementById('export-annual-summary-btn').addEventListener('click', exportAnnualSummaryToExcel);
+
+
+        // --- Gestion des formulaires ---
+        
+        /**
+         * Formulaire: Ajout d'un nouvel employé
+         */
+        addEmployeeForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = employeeNameInput.value.trim();
+            const email = employeeEmailInput.value.trim(); // Récupère l'email
+            
+            if (name) {
+                const newEmployee = {
+                    id: Date.now(), // ID unique simple
+                    name: name,
+                    email: email, // Sauvegarde l'email
+                    // Attribue la prochaine couleur disponible de manière cyclique
+                    color: EMPLOYEE_COLORS[state.employees.length % EMPLOYEE_COLORS.length]
+                };
+                state.employees.push(newEmployee);
+                saveState();
+                renderEmployeeList(); // Rafraîchit la liste dans la modal
+                renderCalendar(); // Rafraîchit le planning principal (récapitulatifs)
+                addEmployeeForm.reset(); // Vide le formulaire (nom ET email)
+            }
+        });
+        
+        /**
+         * Formulaire: Suppression ou Édition d'email (dans la modal employé)
+         * Utilise la délégation d'événements sur la liste.
+         */
+        employeeList.addEventListener('click', (e) => {
+            // Cas 1: Clic sur "Supprimer"
+            const deleteBtn = e.target.closest('.delete-employee-btn');
+            if (deleteBtn) {
+                const id = parseInt(deleteBtn.dataset.id);
+                const employee = state.employees.find(e => emp.id === id);
+                const message = `Voulez-vous vraiment supprimer ${employee.name} ?\nTous ses créneaux seront perdus.`;
+                
+                // MODIFIÉ (V22): Remplacement de window.confirm()
+                openConfirmModal(message, () => {
+                    state.employees = state.employees.filter(emp => emp.id !== id);
+                    // Supprime aussi tous les créneaux associés
+                    state.shifts = state.shifts.filter(shift => shift.employeeId !== id);
+                    saveState();
+                    renderEmployeeList();
+                    renderCalendar();
+                });
+            }
+            
+            // Cas 2: Clic sur l'email pour le modifier
+            const emailDisplay = e.target.closest('.employee-email-display');
+            if (emailDisplay) {
+                const id = parseInt(emailDisplay.dataset.id);
+                const employee = state.employees.find(emp => emp.id === id);
+                // PROMPT BASIQUE (remplace window.prompt)
+                const newEmail = prompt(`Modifier le courriel pour ${employee.name}:`, employee.email);
+                
+                if (newEmail !== null) { // Si l'utilisateur n'a pas cliqué "Annuler"
+                    employee.email = newEmail.trim();
+                    saveState();
+                    renderEmployeeList(); // Rafraîchit la liste
+                }
+            }
+        });
+
+
+        /**
+         * Formulaire: Sauvegarde d'un créneau (Création ou Édition manuelle).
+         * MODIFIÉ: Gère maintenant la duplication de créneaux avec validation.
+         */
+        shiftForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            // --- 1. Récupération des données du formulaire ---
+            const id = document.getElementById('shift-id').value;
+            const startDate = document.getElementById('start-date').value;
+            const startTime = document.getElementById('start-time').value;
+            const endDate = document.getElementById('end-date').value;
+            const endTime = document.getElementById('end-time').value;
+            const employeeId = document.getElementById('shift-employee').value;
+            // NOUVEAU: Récupération du nombre de duplications
+            const duplicateCount = parseInt(document.getElementById('shift-duplicate').value);
+
+            // --- 2. Validation simple des champs ---
+            if (!startDate || !startTime || !endDate || !endTime || !employeeId) {
+                displayAlert('error', 'Veuillez remplir tous les champs du formulaire.');
+                return;
+            }
+            
+            const start = dayjs(`${startDate}T${startTime}`);
+            const end = dayjs(`${endDate}T${endTime}`);
+            
+            if (end.isBefore(start)) {
+                displayAlert('error', 'La date de fin ne peut pas être antérieure à la date de début.');
+                return;
+            }
+            
+            if (start.isBefore(PLANNING_START_DATE, 'day')) {
+                 displayAlert('error', `Les créneaux ne peuvent pas être saisis avant le ${PLANNING_START_DATE.format('DD/MM/YYYY')}.`);
+                 return;
+            }
+
+            // --- 3. Préparation du lot de créneaux (Original + Duplications) ---
+            
+            // ID du créneau qu'on édite (null si création)
+            const shiftIdBeingEdited = id ? parseInt(id) : null;
+            const type = document.getElementById('shift-type').value;
+            
+            // Tableau qui contiendra tous les créneaux à créer/modifier
+            let shiftsToProcess = [];
+
+            // 3a. Ajouter le créneau original (celui de la modale)
+            const originalShiftData = {
+                employeeId: parseInt(employeeId),
+                start: start.toISOString(),
+                end: end.toISOString(),
+                type: type,
+                id: shiftIdBeingEdited // Garde l'ID s'il existe (pour une édition)
+            };
+            shiftsToProcess.push(originalShiftData);
+
+            // 3b. Ajouter les duplications (si demandé)
+            for (let i = 1; i <= duplicateCount; i++) {
+                const nextStart = start.add(i, 'day');
+                const nextEnd = end.add(i, 'day');
+                
+                // Vérifie que la duplication ne tombe pas avant la date limite
+                if (nextStart.isBefore(PLANNING_START_DATE, 'day')) {
+                    displayAlert('warning', `Une duplication (${nextStart.format('DD/MM')}) tombe avant la date autorisée et a été ignorée.`);
+                    continue; // Ignore cette duplication
+                }
+
+                shiftsToProcess.push({
+                    employeeId: parseInt(employeeId),
+                    start: nextStart.toISOString(),
+                    end: nextEnd.toISOString(),
+                    type: type,
+                    id: null // Les duplications sont toujours de NOUVEAUX créneaux
+                });
+            }
+
+            // --- 4. Validation Métier (Le garde-fou) ---
+            // On vérifie CHAQUE créneau du lot avant de sauvegarder QUOI QUE CE SOIT.
+            
+            // Pour la validation, on doit exclure l'ancien créneau (si on l'édite)
+            // pour qu'il ne se valide pas lui-même.
+            const shiftIdToExcludeForValidation = shiftIdBeingEdited;
+
+            for (const shift of shiftsToProcess) {
+                // On ne valide légalement que les créneaux de 'travail'
+                if (shift.type === 'travail') {
+                    
+                    // Note: L'ID d'exclusion est le même (l'original) pour toutes les vérifications,
+                    // car on vérifie chaque nouveau créneau par rapport à l'état *actuel* (moins l'original).
+
+                    // NOUVEAU CONTRÔLE (Demande utilisateur):
+                    // Vérifie si le créneau (ou sa duplication) se chevauche avec un autre créneau
+                    // déjà existant pour cet employé.
+                    if (isOverlappingExistingShift(shift.employeeId, shift, shiftIdToExcludeForValidation)) {
+                        displayAlert('error', `Validation échouée (Chevauchement) pour le ${dayjs(shift.start).format('DD/MM')}. Opération annulée.`);
+                        return; // Bloque TOUTE l'opération
+                    }
+                    
+                    if (isOverDailyHourLimit(shift.employeeId, shift, shiftIdToExcludeForValidation)) {
+                        displayAlert('error', `Validation échouée (Limite 10h/24h) pour le ${dayjs(shift.start).format('DD/MM')}. Opération annulée.`);
+                        return; // Bloque TOUTE l'opération
+                    }
+                    if (!hasWeeklyRest(shift.employeeId, shift, shiftIdToExcludeForValidation)) {
+                        displayAlert('error', `Validation échouée (Repos 36h) pour la semaine du ${dayjs(shift.start).format('DD/MM')}. Opération annulée.`);
+                        return; // Bloque TOUTE l'opération
+                    }
+                }
+            }
+            
+            // --- 5. Sauvegarde (Si toutes les validations sont passées) ---
+
+            // 5a. Gérer le créneau original (peut être une édition ou une création)
+            const originalShift = shiftsToProcess[0];
+            if (originalShift.id) { // C'est une édition
+                const index = state.shifts.findIndex(s => s.id === originalShift.id);
+                if (index !== -1) {
+                    state.shifts[index] = { ...state.shifts[index], ...originalShift };
+                }
+            } else { // C'est une création
+                originalShift.id = Date.now(); // Nouvel ID
+                state.shifts.push(originalShift);
+            }
+
+            // 5b. Gérer les duplications (toujours des créations)
+            for (let i = 1; i < shiftsToProcess.length; i++) {
+                const newShift = shiftsToProcess[i];
+                newShift.id = Date.now() + i; // Assure un ID unique (Date.now() + index)
+                state.shifts.push(newShift);
+            }
+
+            // --- 6. Finalisation ---
+            saveState();
+            shiftModal.classList.add('hidden');
+            renderCalendar(); // Redessine tout
+        });
+
+        // Suppression de créneau (depuis la modal)
+        deleteShiftBtn.addEventListener('click', () => {
+            const id = parseInt(document.getElementById('shift-id').value);
+            
+            // MODIFIÉ (V22): Remplacement de window.confirm()
+            const message = `Voulez-vous vraiment supprimer ce créneau ?`;
+            openConfirmModal(message, () => {
+                state.shifts = state.shifts.filter(s => s.id !== id);
+                saveState();
+                shiftModal.classList.add('hidden');
+                renderCalendar();
+            });
+        });
+
+        // --- Initialisation de l'application ---
+        loadState(); // Charge les données
+        
+        // NOUVEAU (V22): Attacher le gestionnaire "Annuler" de la modal de confirmation
+        closeConfirmModalBtn.addEventListener('click', () => {
+            confirmModal.classList.add('hidden');
+            confirmModalBtn.onclick = null; // Nettoie le callback
+        });
+        
+        renderCalendar(); // Affiche le calendrier
+    });
+    </script>
+</body>
+</html>
